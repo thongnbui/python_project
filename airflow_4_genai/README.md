@@ -78,16 +78,247 @@ airflow_4_genai/
 3. Stores embeddings in local Weaviate instance
 4. Performs semantic search queries
 
-**Example Query**:
+#### Step-by-Step Implementation
+
+**1. Import Libraries and Setup**
 ```python
-query = "A philosophical book"
-# Returns: The Idea of the World (2019) by Bernardo Kastrup
+import os
+import json
+from fastembed import TextEmbedding
+import weaviate
+from weaviate.classes.data import DataObject
+
+# Configuration
+COLLECTION_NAME = "Books"  # Weaviate collection name
+BOOK_DESCRIPTION_FOLDER = "include/data"
+EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 ```
 
-**Data Flow**:
+**2. Create Embedded Weaviate Instance**
+```python
+# Instantiate local Weaviate (no external server needed)
+client = weaviate.connect_to_embedded(
+    persistence_data_path="tmp/weaviate",  # Local storage
+)
+print(f"Client is ready: {client.is_ready()}")
 ```
-Text Files → Extract Metadata → Create Embeddings → Weaviate DB → Query Results
+
+**What is Embedded Weaviate?**
+- Runs directly from your Python code (no separate server)
+- Perfect for prototyping and local development
+- Data persists in `tmp/weaviate/` directory
+- In production, you'd use a containerized Weaviate instance
+
+**3. Create Collection (Database Schema)**
+```python
+# Check if collection already exists
+existing_collections = client.collections.list_all()
+existing_collection_names = existing_collections.keys()
+
+if COLLECTION_NAME not in existing_collection_names:
+    print(f"Collection {COLLECTION_NAME} does not exist yet. Creating it...")
+    collection = client.collections.create(name=COLLECTION_NAME)
+    print(f"Collection {COLLECTION_NAME} created successfully.")
+else:
+    print(f"Collection {COLLECTION_NAME} already exists. No action taken.")
+    collection = client.collections.get(COLLECTION_NAME)
 ```
+
+**What is a Collection?**
+- A Weaviate collection = a table/schema for storing objects
+- Each object has properties (metadata) + vector embedding
+- Similar to a database table, but optimized for vector search
+
+**4. Load Book Descriptions from Files**
+```python
+# List all .txt files in data folder
+book_description_files = [
+    f for f in os.listdir(BOOK_DESCRIPTION_FOLDER)
+    if f.endswith('.txt')
+]
+
+# Parse each file and extract book metadata
+list_of_book_data = []
+
+for book_description_file in book_description_files:
+    with open(
+        os.path.join(BOOK_DESCRIPTION_FOLDER, book_description_file), "r"
+    ) as f:
+        book_descriptions = f.readlines()
+    
+    # Each line format: [Index] ::: [Title] ::: [Author] ::: [Description]
+    titles = [
+        book_description.split(":::")[1].strip()
+        for book_description in book_descriptions
+    ]
+    authors = [
+        book_description.split(":::")[2].strip()
+        for book_description in book_descriptions
+    ]
+    book_description_text = [
+        book_description.split(":::")[3].strip()
+        for book_description in book_descriptions
+    ]
+    
+    # Create structured data
+    book_descriptions = [
+        {
+            "title": title,
+            "author": author,
+            "description": description,
+        }
+        for title, author, description in zip(
+            titles, authors, book_description_text
+        )
+    ]
+    
+    list_of_book_data.append(book_descriptions)
+```
+
+**Example Book Data Structure:**
+```python
+[
+    {
+        "title": "The Idea of the World (2019)",
+        "author": "Bernardo Kastrup",
+        "description": "An ontological thesis arguing for the primacy of mind over matter."
+    },
+    {
+        "title": "Exploring the World of Lucid Dreaming (1990)",
+        "author": "Stephen LaBerge",
+        "description": "A practical guide to learning and enjoying lucid dreams."
+    }
+]
+```
+
+**5. Create Vector Embeddings**
+```python
+# Initialize embedding model (downloads on first use)
+embedding_model = TextEmbedding(EMBEDDING_MODEL_NAME)
+
+list_of_description_embeddings = []
+
+# Generate embeddings for each book description
+for book_data in list_of_book_data:
+    book_descriptions = [book["description"] for book in book_data]
+    
+    # Convert text to 384-dimensional vectors
+    description_embeddings = [
+        list(embedding_model.embed([desc]))[0] 
+        for desc in book_descriptions
+    ]
+    
+    list_of_description_embeddings.append(description_embeddings)
+```
+
+**Why FastEmbed?**
+- Fast CPU-based embedding generation (no GPU required)
+- Model: `BAAI/bge-small-en-v1.5` (384 dimensions)
+- Optimized for semantic similarity
+- Each description → 384-dimensional vector
+
+**6. Load Embeddings into Weaviate**
+```python
+# Insert books with their embeddings into Weaviate
+for book_data_list, emb_list in zip(list_of_book_data, list_of_description_embeddings):
+    items = []
+    
+    for book_data, emb in zip(book_data_list, emb_list):
+        # Create data object with properties and vector
+        item = DataObject(
+            properties={
+                "title": book_data["title"],
+                "author": book_data["author"],
+                "description": book_data["description"],
+            },
+            vector=emb  # 384-dimensional embedding
+        )
+        items.append(item)
+    
+    # Batch insert for efficiency
+    collection.data.insert_many(items)
+
+print(f"Successfully loaded {len(items)} books into Weaviate!")
+```
+
+**What's stored in Weaviate?**
+- **Properties**: Metadata (title, author, description) - searchable text
+- **Vector**: 384-dimensional embedding - enables semantic similarity search
+- Each book is indexed for both keyword and vector search
+
+**7. Query with Semantic Search**
+```python
+# User query (natural language)
+query_str = "A philosophical book"
+
+# Initialize embedding model and get collection
+embedding_model = TextEmbedding(EMBEDDING_MODEL_NAME)
+collection = client.collections.get(COLLECTION_NAME)
+
+# Convert query to embedding (same 384-dimensional space)
+query_emb = list(embedding_model.embed([query_str]))[0]
+
+# Perform vector similarity search
+results = collection.query.near_vector(
+    near_vector=query_emb,
+    limit=1,  # Return top 1 most similar book
+)
+
+# Display results
+for result in results.objects:
+    print(f"You should read: {result.properties['title']} by {result.properties['author']}")
+    print("Description:")
+    print(result.properties["description"])
+```
+
+**Example Output:**
+```
+You should read: The Idea of the World (2019) by Bernardo Kastrup
+Description:
+An ontological thesis arguing for the primacy of mind over matter.
+```
+
+**How Semantic Search Works:**
+1. Query text → embedding vector (384 dimensions)
+2. Compare query vector to all book vectors using cosine similarity
+3. Return books with highest similarity scores
+4. Understands meaning, not just keywords!
+
+**Why This Works:**
+- Query "philosophical book" matches "ontological thesis" semantically
+- No keyword overlap needed - understands concepts
+- Vector space captures meaning relationships
+- Similar embeddings = similar meaning
+
+#### Complete Data Flow
+
+```
+📄 Text Files (book_descriptions_1.txt, book_descriptions_2.txt)
+    ↓ Parse with split(":::")
+📊 Structured Data [{title, author, description}, ...]
+    ↓ FastEmbed (BAAI/bge-small-en-v1.5)
+🔢 Vector Embeddings [384-dimensional arrays]
+    ↓ insert_many()
+💾 Weaviate Collection (Books)
+    ├─ Properties: {title, author, description}
+    └─ Vectors: [384-dimensional embeddings]
+    ↓ query.near_vector()
+🔍 Semantic Search Results (ranked by similarity)
+```
+
+#### Key Takeaways
+
+✅ **Embedded Weaviate** - Perfect for local development and prototyping
+
+✅ **FastEmbed** - Efficient CPU-based embeddings without GPU
+
+✅ **Semantic Search** - Find similar content by meaning, not keywords
+
+✅ **Vector + Metadata** - Store both embeddings and searchable properties
+
+✅ **Batch Operations** - Use `insert_many()` for better performance
+
+✅ **RAG Foundation** - This is the retrieval component for RAG systems
 
 ---
 
