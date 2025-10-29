@@ -1364,78 +1364,18 @@ def cortex_researcher_node_with_eval(
 **Add explicit sub-goals, pre-conditions, and post-conditions:**
 
 ```python
-def improved_plan_prompt(state: State) -> str:
-    """
-    Enhanced planning prompt with structured sub-goals.
-    """
-    user_query = state.get("user_query", "")
-    enabled_agents = state.get("enabled_agents", [])
-    agent_descriptions = format_agent_list_for_planning(state)
-    
-    prompt = f"""
-You are an expert planning agent. Given a user query, create a detailed, 
-step-by-step plan that achieves the user's goal.
+import helper
+import prompts
+from langchain.schema import HumanMessage
 
-**User Query:** {user_query}
+def patched_plan_prompt(state):
+    base = prompts.plan_prompt(state).content
+    insertion = '"action": "string",\n            "pre_conditions": ["string", ...],\n            "post_conditions": ["string", ...],\n            "goal": "string",'
+    base = base.replace('"action": "string",', insertion)
+    return HumanMessage(content=base)
 
-**Available Agents:**
-{agent_descriptions}
-
-**Plan Requirements:**
-
-For each step, provide:
-1. **Step Number** (integer)
-2. **Sub-Goal** - What this step aims to achieve
-3. **Action** - Specific instruction for the agent
-4. **Agent** - Which agent to use (must be from available agents)
-5. **Pre-Conditions** - What must be true before this step
-6. **Post-Conditions** - What will be true after successful completion
-7. **Success Criteria** - How to measure if this step succeeded
-
-**Output Format (JSON):**
-```json
-{{
-  "1": {{
-    "sub_goal": "Retrieve top 3 client deals by value closed this quarter",
-    "action": "Query the CRM database for deals with close_date in Q4 2025, status='Closed', sorted by deal_value DESC, limit 3",
-    "agent": "cortex_researcher",
-    "pre_conditions": ["CRM database is accessible", "User has specified time period"],
-    "post_conditions": ["Have list of exactly 3 deals with company names and values", "Know which companies to search meeting notes for"],
-    "success_criteria": "Retrieved 3 deals with company_name, deal_value, close_date fields populated"
-  }},
-  "2": {{
-    "sub_goal": "Find meeting notes for those 3 clients",
-    "action": "Search meeting transcripts for [Company1, Company2, Company3] from Step 1",
-    "agent": "cortex_researcher",
-    "pre_conditions": ["Step 1 completed successfully", "Have list of 3 company names"],
-    "post_conditions": ["Have meeting notes for all 3 companies", "Notes contain discussion of pain points/decisions"],
-    "success_criteria": "At least 1 relevant meeting note per company retrieved"
-  }},
-  ...
-}}
+helper.plan_prompt = patched_plan_prompt
 ```
-
-**Planning Guidelines:**
-- Make each step **specific and measurable**
-- Ensure steps are **sequential** (dependencies respected)
-- Include **exit criteria** (when to terminate)
-- Add **fallback steps** for high-risk operations
-- Use **chart_generator only if user requests visualization**
-- Always end with **synthesizer** or **chart_summarizer**
-
-Now create the plan:
-"""
-    
-    return prompt
-```
-
-**Key Improvements:**
-- ✅ **Sub-goals** - Clear purpose for each step
-- ✅ **Pre/Post-conditions** - Explicit dependencies
-- ✅ **Success criteria** - Measurable outcomes
-- ✅ **Structured format** - Easier for executor to reason
-
----
 
 #### 6.3 Improve Executor Prompt
 
@@ -1492,14 +1432,12 @@ You are the executor agent. Your job is to:
    - Be specific about data fields required
 
 **Output Format (JSON):**
-```json
 {{
   "replan": false,
   "goto": "cortex_researcher",
   "reason": "Step 1 succeeded with context_relevance=0.95. Proceeding to Step 2 to search meeting notes for the 3 companies retrieved.",
   "query": "Search meeting transcripts for TechCorp Inc, GlobalSoft Ltd, and DataFlow Systems. Find mentions of pain points, concerns, decision factors, and action items from Q4 2025 meetings."
 }}
-```
 
 **Evaluation Thresholds:**
 - context_relevance < 0.5 → **Replan** (retrieved info not relevant)
