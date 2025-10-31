@@ -71,7 +71,7 @@ MAX_REPLANS = 2
 snowflake_connection_parameters = {
     "account": os.getenv("SNOWFLAKE_ACCOUNT"),
     "user": os.getenv("SNOWFLAKE_USER"),
-    "password": os.getenv("SNOWFLAKE_PAT"),
+    "password": os.getenv("SNOWFLAKE_PASSWORD"),
     "database": os.getenv("SNOWFLAKE_DATABASE"),
     "schema": os.getenv("SNOWFLAKE_SCHEMA"),
     "role": os.getenv("SNOWFLAKE_ROLE"),
