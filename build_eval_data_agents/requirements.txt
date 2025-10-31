@@ -1,1 +1,43 @@
-../requirements.txt
+# Requirements for Building and Evaluating Data Agents
+# Covers L2.ipynb, helper.py, and prompts.py
+
+# Core LangChain and LangGraph
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-openai>=0.0.5
+langchain-experimental>=0.0.50
+langgraph>=0.0.20
+
+# LangChain Integrations
+langchain-tavily>=0.0.1
+
+# Environment Management
+python-dotenv>=1.0.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Type Hints (for Python < 3.9)
+typing-extensions>=4.7.0
+
+# Jupyter/IPython Support
+ipython>=8.0.0
+jupyter>=1.0.0
+
+# OpenAI API (for LLM models)
+openai>=1.0.0
+
+# Pydantic (for data validation - used in helper.py)
+pydantic>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Snowflake Integration (used in helper.py for Cortex agents)
+snowflake-snowpark-python>=1.0.0
+snowflake-core>=1.0.0
+
+# TruLens Evaluation Framework (used in helper.py for evaluation)
+trulens>=2.4.2
+trulens-providers-openai>=2.4.2
