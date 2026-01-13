@@ -1009,7 +1009,7 @@ LIMIT 3;
 1. [ID: tc_20251025] "Initial discovery call with TechCorp Inc's IT Director..."
 2. [ID: gs_20251023] "Follow-up meeting with GlobalSoft CTO regarding..."
 3. [ID: df_20251024] "Pricing discussion with DataFlow CFO, expressed..."
-```
+
 
 **What You'll Learn:**
 - How to set up Snowflake Cortex Agent with semantic models
