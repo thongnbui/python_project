@@ -14,6 +14,7 @@ A comprehensive guide to building production-grade multi-agent systems with Lang
 - [Lessons](#lessons)
   - [Lesson 2: Multi-Agent Workflow](#lesson-2-multi-agent-workflow)
   - [Lesson 3: Expand Data Agent Capabilities](#lesson-3-expand-data-agent-capabilities)
+  - [Lesson 4: Observe Agent Performance](#lesson-4-observe-agent-performance)
   - [Lesson 5: Measure Agent's GPA](#lesson-5-measure-agents-gpa)
   - [Lesson 6: Improve Agent's GPA](#lesson-6-improve-agents-gpa)
 - [Setup](#setup)
@@ -1010,6 +1011,407 @@ LIMIT 3;
 3. [ID: df_20251024] "Pricing discussion with DataFlow CFO, expressed..."
 ```
 
+**What You'll Learn:**
+- How to set up Snowflake Cortex Agent with semantic models
+- How to create and configure Cortex Search services
+- How to handle streaming responses from Cortex Agent API
+- How to integrate enterprise data sources into multi-agent workflows
+- How to combine structured (SQL) and unstructured (semantic search) data retrieval
+- How to enable agents to reason across multiple data sources
+
+**Next Steps:**
+After completing Lesson 3, you'll have a fully functional multi-agent system that can query both public web data and private enterprise data. In Lesson 4, you'll add observability and tracing to monitor agent performance.
+
+---
+
+### **Lesson 4: Observe Agent Performance** 📊
+
+**Objective:** Add tracing and evaluation to the data agent using TruLens to observe and measure its performance with RAG Triad evaluations.
+
+#### Key Concepts
+
+1. **RAG Triad Evaluations** - Three core metrics for research and generation tasks
+2. **OpenTelemetry Tracing** - Instrument agent nodes for observability
+3. **TruLens Integration** - Automated evaluation and tracing infrastructure
+4. **Custom Instrumentation** - Add metadata to retrieval operations
+5. **Dashboard Visualization** - View traces and evaluations in TruLens dashboard
+
+---
+
+#### 4.1 RAG Triad Evaluations
+
+**Why RAG Triad?**
+
+Data agents perform research and generation tasks similar to RAG systems. The RAG Triad provides three complementary evaluation dimensions:
+
+| Metric | What It Measures | When to Use |
+|--------|------------------|-------------|
+| **Context Relevance** | How relevant is retrieved information to the query? | Evaluate research/retrieval steps |
+| **Groundedness** | Is the final answer supported by retrieved context? | Evaluate synthesis accuracy |
+| **Answer Relevance** | Does the final answer address the original question? | Evaluate end-to-end goal completion |
+
+**Setup Evaluation Provider:**
+
+```python
+from trulens.providers.openai import OpenAI
+
+# Use GPT-4o for RAG Triad Evaluations
+provider = OpenAI(model_engine="gpt-4o")
+```
+
+---
+
+#### 4.2 Define RAG Triad Feedback Functions
+
+**1. Groundedness Feedback Function**
+
+Evaluates if the final answer is supported by retrieved contexts:
+
+```python
+import numpy as np
+from trulens.core import Feedback
+from trulens.core.feedback.selector import Selector
+from trulens.otel.semconv.trace import SpanAttributes
+
+# Define groundedness feedback function
+f_groundedness = (
+    Feedback(
+        provider.groundedness_measure_with_cot_reasons, 
+        name="Groundedness"
+    )
+    .on({
+            "source": Selector(
+                span_type=SpanAttributes.SpanType.RETRIEVAL,
+                span_attribute=SpanAttributes.RETRIEVAL.RETRIEVED_CONTEXTS,
+                collect_list=True
+            )
+        }
+    )
+    .on_output()
+)
+```
+
+**How It Works:**
+- Collects all retrieved contexts from retrieval spans
+- Compares final answer against retrieved contexts
+- Scores 0-1: 1.0 = fully grounded, 0.0 = unsupported claims
+
+---
+
+**2. Answer Relevance Feedback Function**
+
+Evaluates if the final answer addresses the original question:
+
+```python
+# Question/answer relevance between overall question and answer
+f_answer_relevance = (
+    Feedback(provider.relevance_with_cot_reasons, name="Answer Relevance")
+    .on_input()
+    .on_output()
+)
+```
+
+**How It Works:**
+- Compares user query (`on_input()`) with final answer (`on_output()`)
+- Scores 0-1: 1.0 = fully answers question, 0.0 = irrelevant answer
+
+---
+
+**3. Context Relevance Feedback Function**
+
+Evaluates if retrieved information is relevant to the agent's sub-query:
+
+```python
+# Context relevance between question and each context chunk
+f_context_relevance = (
+    Feedback(provider.context_relevance_with_cot_reasons, 
+             name="Context Relevance")
+    .on({
+            "question": Selector(
+                span_type=SpanAttributes.SpanType.RETRIEVAL,
+                span_attribute=SpanAttributes.RETRIEVAL.QUERY_TEXT,
+            )
+        }
+    )
+    .on({
+            "context": Selector(
+                span_type=SpanAttributes.SpanType.RETRIEVAL,
+                span_attribute=SpanAttributes.RETRIEVAL.RETRIEVED_CONTEXTS,
+                collect_list=False
+            )
+        }
+    )
+    .aggregate(np.mean)  # Average across all context chunks
+)
+```
+
+**How It Works:**
+- Extracts query text from retrieval spans
+- Compares each retrieved context chunk against the query
+- Averages scores across all chunks
+- Scores 0-1: 1.0 = highly relevant, 0.0 = irrelevant
+
+---
+
+#### 4.3 Create TruLens Session for Logging
+
+**Initialize Database:**
+
+```python
+from trulens.core.session import TruSession
+from trulens.core.database.connector.default import DefaultDBConnector
+
+# Initialize connector with SQLite database
+connector = DefaultDBConnector(database_url="sqlite:///default.sqlite")
+
+# Create TruSession with the custom connector
+session = TruSession(connector=connector)
+session.reset_database()  # Optional: clear previous runs
+```
+
+**What Gets Stored:**
+- OpenTelemetry traces (agent execution flow)
+- Evaluation scores (RAG Triad metrics)
+- Agent inputs and outputs
+- Retrieval contexts and queries
+
+---
+
+#### 4.4 Add Custom Instrumentation to Retrieval Nodes
+
+**Instrument Cortex Researcher Node:**
+
+```python
+from helper import cortex_agent, State
+from trulens.core.otel.instrument import instrument
+from langchain.schema import HumanMessage
+from langgraph.graph import END
+from langgraph.types import Command
+from typing import Literal
+
+@instrument(
+    span_type=SpanAttributes.SpanType.RETRIEVAL,
+    attributes=lambda ret, exception, *args, **kwargs: {
+        SpanAttributes.RETRIEVAL.QUERY_TEXT: args[0].get("agent_query") if args[0].get("agent_query") else None,
+        SpanAttributes.RETRIEVAL.RETRIEVED_CONTEXTS: [
+            ret.update["messages"][-1].content
+        ] if hasattr(ret, "update") else "No tool call",
+    },
+)
+def cortex_agents_research_node(
+    state: State,
+) -> Command[Literal["executor"]]:
+    query = state.get("agent_query", state.get("user_query", ""))
+    agent_response = cortex_agent.invoke({"messages": query})
+    new_message = HumanMessage(
+        content=agent_response['messages'][-1].content, 
+        name="cortex_researcher"
+    )
+    return Command(
+        update={"messages": [new_message]},
+        goto="executor",
+    )
+```
+
+**Instrument Web Researcher Node:**
+
+```python
+from helper import web_search_agent
+
+@instrument(
+    span_type=SpanAttributes.SpanType.RETRIEVAL,
+    attributes=lambda ret, exception, *args, **kwargs: {
+        SpanAttributes.RETRIEVAL.QUERY_TEXT: args[0].get("agent_query") if args[0].get("agent_query") else None,
+        SpanAttributes.RETRIEVAL.RETRIEVED_CONTEXTS: [
+            ret.update["messages"][-1].content
+        ] if hasattr(ret, "update") else "No tool call",
+    },
+)
+def web_research_node(
+    state: State,
+) -> Command[Literal["executor"]]:
+    agent_query = state.get("agent_query")
+    result = web_search_agent.invoke({"messages": agent_query})
+    result["messages"][-1] = HumanMessage(
+        content=result["messages"][-1].content, 
+        name="web_researcher"
+    )
+    return Command(
+        update={"messages": result["messages"]},
+        goto="executor",
+    )
+```
+
+**What Instrumentation Does:**
+- Creates OpenTelemetry spans for each retrieval operation
+- Attaches query text and retrieved contexts as span attributes
+- Enables TruLens to extract data for evaluation functions
+- Provides traceability for debugging and analysis
+
+---
+
+#### 4.5 Build Graph with Instrumentation
+
+```python
+from langgraph.graph import START, StateGraph
+from helper import (
+    State, planner_node, executor_node, 
+    cortex_agents_research_node, web_research_node,
+    chart_node, chart_summary_node, synthesizer_node
+)
+
+workflow = StateGraph(State)
+workflow.add_node("planner", planner_node)
+workflow.add_node("executor", executor_node)
+workflow.add_node("web_researcher", web_research_node)  # Instrumented!
+workflow.add_node("cortex_researcher", cortex_agents_research_node)  # Instrumented!
+workflow.add_node("chart_generator", chart_node)
+workflow.add_node("chart_summarizer", chart_summary_node)
+workflow.add_node("synthesizer", synthesizer_node)
+
+workflow.add_edge(START, "planner")
+
+graph = workflow.compile()
+```
+
+---
+
+#### 4.6 Register Agent with TruLens
+
+```python
+from trulens.apps.langgraph import TruGraph
+
+tru_recorder = TruGraph(
+    graph,
+    app_name="Sales Data Agent",
+    app_version="L4: Base",
+    feedbacks=[
+        f_answer_relevance,
+        f_context_relevance,
+        f_groundedness,
+    ],
+)
+```
+
+**What Happens:**
+- TruLens instruments the graph for automatic tracing
+- Evaluation functions are registered and will run automatically
+- All agent invocations will be logged and evaluated
+
+---
+
+#### 4.7 Record Agent Usage
+
+**Example Query 1: Chart Top Deals**
+
+```python
+from langchain.schema import HumanMessage
+
+with tru_recorder as recording:
+    query = "What are our top 3 client deals? Chart the deal value for each."
+    print(f"Query: {query}")
+    state = {
+        "messages": [HumanMessage(content=query)],
+        "user_query": query,
+        "enabled_agents": [
+            "cortex_researcher", "web_researcher", 
+            "chart_generator", "chart_summarizer", 
+            "synthesizer"
+        ],
+    }
+    graph.invoke(state)
+    print("--------------------------------")
+```
+
+**Example Query 2: Regulatory Analysis**
+
+```python
+with tru_recorder as recording:
+    query = """Identify our pending deals, research if they may be 
+    experiencing regulatory changes, and using the meeting notes for 
+    each customer, provide a new value proposition for each given 
+    the regulatory changes."""
+    print(f"Query: {query}")
+    state = {
+        "messages": [HumanMessage(content=query)],
+        "user_query": query,
+        "enabled_agents": [
+            "cortex_researcher", "web_researcher", 
+            "chart_generator", "chart_summarizer", 
+            "synthesizer"
+        ],
+    }
+    graph.invoke(state)
+    print("--------------------------------")
+```
+
+**Example Query 3: Multi-Source Research**
+
+```python
+with tru_recorder as recording:
+    query = """Identify our largest client deal, then find important 
+    topics in the meeting notes with that company, and find a news 
+    article related to the important topics discussed."""
+    print(f"Query: {query}")
+    state = {
+        "messages": [HumanMessage(content=query)],
+        "user_query": query,
+        "enabled_agents": [
+            "cortex_researcher", "web_researcher", 
+            "chart_generator", "chart_summarizer", 
+            "synthesizer"
+        ],
+    }
+    graph.invoke(state)
+    print("--------------------------------")
+```
+
+**Note:** Queries may take 2-5 minutes to complete due to evaluation overhead. Results may vary due to the probabilistic nature of LLMs.
+
+---
+
+#### 4.8 Launch TruLens Dashboard
+
+**Start Dashboard:**
+
+```python
+from trulens.dashboard import run_dashboard
+import os
+
+str_port = 8001
+_ = run_dashboard(port=str_port)
+print(os.environ['DLAI_LOCAL_URL'].format(port=str_port))
+```
+
+**Dashboard Features:**
+- **Traces View**: See complete agent execution flow
+- **Evaluations View**: View RAG Triad scores for each run
+- **Leaderboard**: Compare performance across versions
+- **Span Details**: Inspect individual retrieval operations
+- **Query Analysis**: Analyze which queries perform best/worst
+
+**Access Dashboard:**
+- Use the second link (not localhost) in cloud environments
+- Wait a few minutes for database to populate with evaluation metrics
+
+**What You'll Learn:**
+- How to apply RAG Triad evaluations to multi-agent systems
+- How to instrument agent nodes with OpenTelemetry
+- How to set up TruLens for automated evaluation and tracing
+- How to visualize agent performance in the TruLens dashboard
+- How to interpret evaluation scores (context relevance, groundedness, answer relevance)
+- How to use observability data to identify agent issues
+
+**Key Takeaways:**
+- **RAG Triad** provides complementary evaluation dimensions
+- **Instrumentation** enables automatic evaluation and tracing
+- **TruLens dashboard** provides visual insights into agent performance
+- **Observability** is essential for production agent systems
+- **Evaluation scores** help identify areas for improvement
+
+**Next Steps:**
+After adding observability in Lesson 4, Lesson 5 will dive deeper into Goal-Plan-Act (GPA) alignment framework for more sophisticated evaluation.
+
 ---
 
 ### **Lesson 5: Measure Agent's GPA** 📊
@@ -1596,6 +1998,7 @@ jupyter notebook
 Open any lesson notebook:
 - `L2.ipynb` - Multi-Agent Workflow
 - `L3.ipynb` - Expand Data Agent Capabilities
+- `L4.ipynb` - Observe Agent Performance
 - `L5.ipynb` - Measure Agent's GPA
 - `L6.ipynb` - Improve Agent's GPA
 
@@ -1638,6 +2041,7 @@ build_eval_data_agents/
 ├── prompts.py                              # Prompt templates for planner/executor
 ├── L2.ipynb                                # Lesson 2: Multi-Agent Workflow
 ├── L3.ipynb                                # Lesson 3: Expand Capabilities (Cortex)
+├── L4.ipynb                                # Lesson 4: Observe Agent Performance
 ├── L5.ipynb                                # Lesson 5: Measure GPA
 ├── L6.ipynb                                # Lesson 6: Improve GPA
 ├── default.sqlite                          # TruLens evaluation database
@@ -1683,6 +2087,10 @@ By completing these lessons, you will learn to:
 ✅ Build ReAct agents with tool-calling capabilities
 
 ✅ Generate visualizations dynamically with Python code execution
+
+✅ Add observability and tracing with TruLens
+
+✅ Apply RAG Triad evaluations (context relevance, groundedness, answer relevance)
 
 ✅ Systematically evaluate agent performance using GPA framework
 
