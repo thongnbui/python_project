@@ -10,10 +10,10 @@ A comprehensive guide to building an intelligent email assistant with progressiv
 - [Key Technologies](#key-technologies)
 - [Architecture](#architecture)
 - [Lessons](#lessons)
-  - [Lesson 2: Baseline Email Assistant](#lesson-2-baseline-email-assistant)
-  - [Lesson 3: Email Assistant with Semantic Memory](#lesson-3-email-assistant-with-semantic-memory)
-  - [Lesson 4: Email Assistant with Semantic + Episodic Memory](#lesson-4-email-assistant-with-semantic-episodic-memory)
-  - [Lesson 5: Email Assistant with Semantic + Episodic + Procedural Memory](#lesson-5-email-assistant-with-semantic-episodic-procedural-memory)
+  - [Lesson 2: Baseline Email Assistant](#lesson-2-baseline-email-assistant-)
+  - [Lesson 3: Email Assistant with Semantic Memory](#lesson-3-email-assistant-with-semantic-memory-)
+  - [Lesson 4: Email Assistant with Semantic + Episodic Memory](#lesson-4-email-assistant-with-semantic--episodic-memory-)
+  - [Lesson 5: Email Assistant with Semantic + Episodic + Procedural Memory](#lesson-5-email-assistant-with-semantic--episodic--procedural-memory-)
 - [Setup](#setup)
 - [Usage](#usage)
 - [Project Structure](#project-structure)
@@ -115,7 +115,7 @@ class State(TypedDict):
 
 ## 📝 Lessons
 
-### **Lesson 2: Baseline Email Assistant** 📧 {#lesson-2-baseline-email-assistant}
+### **Lesson 2: Baseline Email Assistant** 📧
 
 **Objective:** Build a basic email assistant that classifies incoming emails and handles responses using hard-coded rules and tools.
 
@@ -299,7 +299,7 @@ Lesson 3 adds semantic memory, enabling the assistant to remember details from p
 
 ---
 
-### **Lesson 3: Email Assistant with Semantic Memory** 🧠 {#lesson-3-email-assistant-with-semantic-memory}
+### **Lesson 3: Email Assistant with Semantic Memory** 🧠
 
 **Objective:** Add semantic memory capabilities to the email assistant, enabling it to remember details from previous emails and use that context for better classification and responses.
 
@@ -447,7 +447,7 @@ Lesson 4 adds episodic memory (few-shot examples) and human-in-the-loop feedback
 
 ---
 
-### **Lesson 4: Email Assistant with Semantic + Episodic Memory** 🎯 {#lesson-4-email-assistant-with-semantic-episodic-memory}
+### **Lesson 4: Email Assistant with Semantic + Episodic Memory** 🎯
 
 **Objective:** Add episodic memory (few-shot examples) and human-in-the-loop feedback to refine the assistant's email classification accuracy.
 
@@ -715,7 +715,7 @@ Lesson 5 adds procedural memory, enabling dynamic updates to instructions, promp
 
 ---
 
-### **Lesson 5: Email Assistant with Semantic + Episodic + Procedural Memory** 🔄 {#lesson-5-email-assistant-with-semantic-episodic-procedural-memory}
+### **Lesson 5: Email Assistant with Semantic + Episodic + Procedural Memory** 🔄
 
 **Objective:** Add procedural memory that allows dynamic updates to instructions, prompts, and agent behavior based on user feedback, creating a fully adaptive email assistant.
 
