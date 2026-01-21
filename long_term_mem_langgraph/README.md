@@ -6,24 +6,24 @@ A comprehensive guide to building an intelligent email assistant with progressiv
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Key Technologies](#key-technologies)
-- [Architecture](#architecture)
-- [Lessons](#lessons)
+- [Overview](#-overview)
+- [Key Technologies](#-key-technologies)
+- [Architecture](#-architecture)
+- [Lessons](#-lessons)
   - [Lesson 2: Baseline Email Assistant](#lesson-2-baseline-email-assistant-)
   - [Lesson 3: Email Assistant with Semantic Memory](#lesson-3-email-assistant-with-semantic-memory-)
   - [Lesson 4: Email Assistant with Semantic + Episodic Memory](#lesson-4-email-assistant-with-semantic--episodic-memory-)
   - [Lesson 5: Email Assistant with Semantic + Episodic + Procedural Memory](#lesson-5-email-assistant-with-semantic--episodic--procedural-memory-)
-- [Setup](#setup)
-- [Usage](#usage)
-- [Project Structure](#project-structure)
-- [Learning Objectives](#learning-objectives)
-- [Resources](#resources)
-- [Best Practices](#best-practices)
-- [Security Notes](#security-notes)
-- [Example Outputs](#example-outputs)
-- [Next Steps](#next-steps)
-- [License](#license)
+- [Setup](#-setup)
+- [Usage](#-usage)
+- [Project Structure](#-project-structure)
+- [Learning Objectives](#-learning-objectives)
+- [Resources](#-resources)
+- [Best Practices](#-best-practices)
+- [Security Notes](#-security-notes)
+- [Example Outputs](#-example-outputs)
+- [Next Steps](#-next-steps)
+- [License](#-license)
 
 ---
 
