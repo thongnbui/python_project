@@ -248,12 +248,59 @@ tokenizer.pad_token = tokenizer.eos_token
 
 **Objective:** Add trainable adapter layers without modifying the full model weights.
 
+#### Why Do We Need LoRA Adapters?
+
+**Critical Question:** If we've quantized the model, why do we need LoRA adapters?
+
+**Answer:** The quantized base model is **frozen** (not trainable). LoRA adapters are the **only trainable components** that allow fine-tuning.
+
+**How QLoRA Works:**
+
+```
+┌─────────────────────────────────┐
+│  Base Model (Mistral 7B)        │
+│  ↓                              │
+│  4-bit Quantization              │
+│  ↓                              │
+│  FROZEN (Not Trainable) ❄️      │ ← Can't modify these weights
+└─────────────────────────────────┘
+           +
+┌─────────────────────────────────┐
+│  LoRA Adapters                  │
+│  Small trainable matrices       │
+│  TRAINABLE ✅                   │ ← Only these get updated!
+└─────────────────────────────────┘
+           =
+┌─────────────────────────────────┐
+│  Fine-Tuned Model               │
+│  (Base frozen + Adapters trained)│
+└─────────────────────────────────┘
+```
+
+**Why Not Train the Quantized Model Directly?**
+
+1. **Memory Constraints** - Even quantized, training all 7B parameters requires too much memory
+2. **Gradient Storage** - Need to store gradients for all parameters during training
+3. **Efficiency** - LoRA adapters are tiny (~100MB) vs full model (3.5GB)
+4. **Modularity** - Can swap adapters for different tasks without retraining base model
+
+**The Magic of LoRA:**
+
+Instead of updating all 7B parameters:
+- **Full fine-tuning**: Update 7,000,000,000 parameters ❌
+- **LoRA**: Update only ~10,000,000 parameters ✅ (0.1% of model)
+
+**LoRA adapters learn to "modify" the base model's behavior** by adding small adjustments to attention layers, without changing the base weights themselves.
+
+---
+
 #### Key Concepts
 
 1. **LoRA (Low-Rank Adaptation)** - Add small trainable matrices to attention layers
 2. **Parameter Efficiency** - Only train ~0.1-1% of model parameters
 3. **Adapter Configuration** - Configure rank, alpha, and target modules
 4. **PEFT Integration** - Use PEFT library for LoRA implementation
+5. **Frozen Base Model** - Base model weights stay unchanged, only adapters train
 
 ---
 
@@ -287,11 +334,31 @@ model.print_trainable_parameters()
 trainable params: 8,388,608 || all params: 3,411,550,208 || trainable%: 0.25
 ```
 
+**What This Means:**
+- **8.4M parameters** are trainable (the LoRA adapters)
+- **3.4B parameters** are frozen (the quantized base model)
+- Only **0.25%** of the model gets updated during training!
+
+**How LoRA Adapters Work:**
+
+LoRA doesn't modify the base model weights. Instead, it adds small matrices that get **multiplied** with the base weights during forward pass:
+
+```
+Original: output = W × input
+With LoRA: output = (W + ΔW) × input
+           where ΔW = B × A (low-rank decomposition)
+```
+
+- **W** = Frozen base model weights (quantized)
+- **A, B** = Small trainable LoRA matrices (only these train!)
+- **ΔW** = Learned adaptation (B × A)
+
 **Key Benefits:**
 - ✅ Only ~0.25% of parameters are trainable
-- ✅ Adapters can be saved/loaded independently
+- ✅ Adapters can be saved/loaded independently (~100MB vs 3.5GB)
 - ✅ Multiple adapters can be swapped for different tasks
-- ✅ Base model remains unchanged
+- ✅ Base model remains unchanged (can reuse for other tasks)
+- ✅ Memory efficient (only store gradients for adapters)
 
 ---
 
