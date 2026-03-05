@@ -795,6 +795,106 @@ Response B (Less Preferred):
 
 ---
 
+#### After DPO: What Needs to be Updated?
+
+**Yes, you need to update and save the model/adapter after DPO training.**
+
+**Complete Workflow:**
+
+```
+1. Supervised Fine-Tuning (SFT) with QLoRA
+   ↓
+   Save LoRA adapter (v1)
+   
+2. DPO Training
+   ↓
+   Updates LoRA adapter weights
+   ↓
+   Save updated LoRA adapter (v2) ✅
+```
+
+**What Gets Updated:**
+
+1. **LoRA Adapters** - DPO training updates the adapter weights
+   - The base model stays frozen (quantized, unchanged)
+   - Only the LoRA adapter matrices (A, B) get updated
+   - Same adapter structure, but with improved weights
+
+2. **Model Behavior** - The updated adapters change model outputs
+   - Better alignment with human preferences
+   - Improved response quality and style
+   - More consistent with preferred outputs
+
+**Saving After DPO:**
+
+```python
+# After DPO training completes
+# Save the updated adapter
+model.save_pretrained("./lora_adapter_dpo")
+
+# The adapter now contains:
+# - Original SFT improvements (from step 1)
+# - DPO alignment improvements (from step 2)
+```
+
+**Loading the DPO-Aligned Model:**
+
+```python
+# Load base model
+base_model = AutoModelForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B-v0.1",
+    quantization_config=bnb_config,
+    device_map="auto",
+)
+
+# Load DPO-aligned adapter
+model = PeftModel.from_pretrained(base_model, "./lora_adapter_dpo")
+
+# Model now has both SFT and DPO improvements!
+```
+
+**Version Management:**
+
+```
+lora_adapter_sft/      # After supervised fine-tuning
+lora_adapter_dpo/      # After DPO alignment (includes SFT + DPO)
+```
+
+**Key Points:**
+
+- ✅ **Adapter gets updated** - DPO modifies the LoRA adapter weights
+- ✅ **Base model stays frozen** - Quantized base model never changes
+- ✅ **Save updated adapter** - Important to save after DPO training
+- ✅ **Single adapter file** - Contains both SFT and DPO improvements
+- ✅ **No separate models** - One adapter with all improvements
+
+**What Happens During DPO:**
+
+```
+Before DPO:
+Base Model (frozen) + LoRA Adapter (SFT-trained)
+→ Generates responses based on fine-tuning data
+
+After DPO:
+Base Model (still frozen) + LoRA Adapter (SFT + DPO-trained)
+→ Generates responses aligned with human preferences
+```
+
+**Storage:**
+
+- **Before DPO**: LoRA adapter ~100MB (SFT only)
+- **After DPO**: LoRA adapter ~100MB (SFT + DPO, same size!)
+- DPO doesn't add new parameters, it just updates existing adapter weights
+
+**Best Practice:**
+
+1. Save adapter after SFT: `lora_adapter_sft/`
+2. Run DPO training (updates adapter in-place)
+3. Save updated adapter: `lora_adapter_dpo/`
+4. Use DPO adapter for deployment (includes all improvements)
+
+---
+
 ### **Hybrid RAG + Fine-Tuning System**
 
 **Combining RAG with fine-tuned models for optimal performance:**
