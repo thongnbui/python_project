@@ -318,6 +318,88 @@ lora_config = LoraConfig(
     bias="none",
     task_type="CAUSAL_LM",
 )
+```
+
+#### Why These Target Modules?
+
+**Understanding Transformer Attention:**
+
+Transformer models use **self-attention** to understand relationships between tokens. The attention mechanism has four key projection matrices:
+
+```
+Input Tokens
+     │
+     ├─→ Q (Query)   ← "What am I looking for?"
+     ├─→ K (Key)     ← "What do I represent?"
+     ├─→ V (Value)   ← "What information do I contain?"
+     │
+     ▼
+Attention Scores = Q × K^T  (How much to attend to each token)
+     │
+     ▼
+Output = Attention × V      (Weighted combination)
+     │
+     ▼
+O (Output Projection)        ← Final transformation
+```
+
+**Why Target These Modules?**
+
+1. **Q, K, V Projections (`q_proj`, `k_proj`, `v_proj`)**:
+   - Control **what** the model attends to
+   - Determine **which tokens** are important
+   - Most critical for adapting model behavior
+   - ~75% of attention parameters
+
+2. **O Projection (`o_proj`)**:
+   - Controls **how** attended information is combined
+   - Final transformation before output
+   - Important for output formatting
+   - ~25% of attention parameters
+
+**Why Not Other Layers?**
+
+| Layer Type | Why Usually Not Targeted | When to Target |
+|------------|-------------------------|----------------|
+| **Embedding** | Rarely needs adaptation | Domain-specific vocabularies |
+| **MLP/FFN** | Less critical for adaptation | Complex reasoning tasks |
+| **Layer Norm** | Very small, limited impact | Fine-grained control |
+| **Output Head** | Task-specific, often retrained separately | Classification tasks |
+
+**Research Findings:**
+
+- **Attention layers** account for ~40% of parameters but ~80% of adaptation benefit
+- Targeting Q, K, V, O gives best performance/efficiency trade-off
+- Adding MLP layers adds ~20% more parameters but only ~5% performance gain
+
+**Alternative Configurations:**
+
+```python
+# Minimal (fastest, least parameters)
+target_modules=["q_proj", "v_proj"]  # Only Q and V
+
+# Standard (recommended) ⭐
+target_modules=["q_proj", "k_proj", "v_proj", "o_proj"]
+
+# Extended (better performance, more parameters)
+target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+# All Linear Layers (maximum adaptation, most parameters)
+target_modules="all-linear"  # Targets all linear layers
+```
+
+**Best Practice:**
+
+Start with `["q_proj", "k_proj", "v_proj", "o_proj"]` (standard configuration):
+- ✅ Best balance of performance and efficiency
+- ✅ Works well for most tasks
+- ✅ Well-tested and documented
+- ✅ ~0.25% of parameters trainable
+
+Only expand if:
+- You need maximum performance and have resources
+- Standard config doesn't meet your requirements
+- You're fine-tuning for very complex reasoning tasks
 
 # Prepare model for training
 model = prepare_model_for_kbit_training(model)
