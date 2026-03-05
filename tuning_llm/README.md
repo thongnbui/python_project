@@ -1003,34 +1003,311 @@ production_model = PeftModel.from_pretrained(base_model, "./lora_adapter_dpo")
 
 ---
 
-#### Continuous Learning Workflow
+#### Where to Collect Preference Data: Production vs Development
 
-If you want to update models based on production feedback:
+**This is a critical question:** Should you collect preference pairs (response A/B) in production or development?
 
-```
-Production → Collect User Feedback → Retrain (Dev) → Redeploy
-```
+**The Answer: Both! Use a hybrid approach.**
 
-**This is NOT DPO running in production**, but rather:
+---
 
-1. **Collect feedback** - Gather user preferences from production
-2. **Retrain in development** - Run DPO training with new preferences
-3. **Redeploy** - Deploy updated model to production
+#### Option 1: Collect in Production (Recommended for Real-World Data)
 
-**Example:**
+**Why Collect in Production:**
+
+✅ **Real user queries** - Actual questions users ask
+✅ **Real-world preferences** - What users actually prefer
+✅ **Production context** - Responses used in real scenarios
+✅ **Scale** - Can collect large amounts of data
+✅ **Diversity** - Wide variety of use cases
+
+**How to Collect in Production:**
 
 ```python
-# Production: Collect feedback
-user_feedback = collect_preferences_from_production()
+# Production: A/B Testing Approach
+def serve_with_preference_collection(user_query):
+    # Generate two responses
+    response_a = model.generate(user_query, temperature=0.7)
+    response_b = model.generate(user_query, temperature=0.9)
+    
+    # Show both to user (or randomly show one, track which)
+    # Collect implicit feedback (which did user engage with?)
+    # OR explicit feedback (ask user to rate)
+    
+    # Store preference pair
+    store_preference_pair({
+        "query": user_query,
+        "response_a": response_a,
+        "response_b": response_b,
+        "preference": user_feedback,  # A or B
+    })
+    
+    # Return preferred response
+    return response_a if user_feedback == "A" else response_b
+```
 
-# Development: Retrain with new feedback
-new_preference_data = prepare_preference_pairs(user_feedback)
-dpo_trainer.train(new_preference_data)
+**Production Collection Methods:**
 
-# Redeploy: Update production model
+1. **A/B Testing** - Serve two responses, track which performs better
+2. **Explicit Rating** - Ask users to rate responses (1-5 stars)
+3. **Implicit Feedback** - Track engagement (clicks, time spent, follow-up questions)
+4. **Human Evaluation** - Have human raters review production responses
+
+**Challenges:**
+
+- ❌ **Infrastructure needed** - Requires A/B testing system
+- ❌ **Privacy concerns** - Need to handle user data carefully
+- ❌ **Cost** - Generating multiple responses costs more
+- ❌ **User experience** - Showing multiple responses may confuse users
+
+---
+
+#### Option 2: Generate in Development (Recommended for Initial Training)
+
+**Why Generate in Development:**
+
+✅ **Controlled environment** - Easy to generate multiple responses
+✅ **No production overhead** - Doesn't affect user experience
+✅ **Fast iteration** - Can quickly create preference pairs
+✅ **Privacy** - No real user data concerns
+✅ **Cost-effective** - Can use cheaper models for generation
+
+**How to Generate in Development:**
+
+```python
+# Development: Generate Preference Pairs
+def generate_preference_pairs(instructions, model):
+    preference_data = []
+    
+    for instruction in instructions:
+        # Generate multiple responses with different parameters
+        response_a = model.generate(instruction, temperature=0.7, top_p=0.9)
+        response_b = model.generate(instruction, temperature=0.9, top_p=0.95)
+        
+        # Use LLM-as-judge or human raters to determine preference
+        preference = llm_judge(instruction, response_a, response_b)
+        
+        preference_data.append({
+            "instruction": instruction,
+            "response_a": response_a,
+            "response_b": response_b,
+            "preference": preference,
+        })
+    
+    return preference_data
+```
+
+**Development Generation Methods:**
+
+1. **LLM-as-Judge** - Use GPT-4 to rate responses
+2. **Human Raters** - Internal team rates responses
+3. **Rule-based** - Use heuristics (length, format, etc.)
+4. **Synthetic Data** - Generate diverse instruction-response pairs
+
+**Advantages:**
+
+- ✅ **Fast** - Can generate thousands of pairs quickly
+- ✅ **Controlled** - Can target specific domains or issues
+- ✅ **No production impact** - Doesn't affect users
+- ✅ **Cost-effective** - Can use cheaper models
+
+---
+
+#### Recommended Hybrid Approach
+
+**Best Practice: Combine Both Methods**
+
+```
+┌─────────────────────────────────┐
+│  INITIAL TRAINING (Development) │
+├─────────────────────────────────┤
+│ 1. Generate preference pairs    │
+│    - Use LLM-as-judge          │
+│    - Human raters               │
+│    - Synthetic data             │
+│    ↓                            │
+│ 2. Train initial DPO model      │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  PRODUCTION DEPLOYMENT          │
+├─────────────────────────────────┤
+│ 3. Deploy DPO-aligned model     │
+│    ↓                            │
+│ 4. Collect real preference data │ ← Production collection
+│    - A/B testing                │
+│    - User feedback              │
+│    - Implicit signals           │
+└──────────────┬──────────────────┘
+               │
+               ▼
+┌─────────────────────────────────┐
+│  CONTINUOUS IMPROVEMENT         │
+├─────────────────────────────────┤
+│ 5. Retrain with production data │
+│    ↓                            │
+│ 6. Redeploy improved model     │
+└─────────────────────────────────┘
+```
+
+**Why This Works:**
+
+1. **Start with Development Data** - Fast initial training
+2. **Deploy to Production** - Get real-world performance
+3. **Collect Production Data** - Gather actual user preferences
+4. **Retrain Periodically** - Improve model with real data
+5. **Iterate** - Continuous improvement cycle
+
+---
+
+#### Production Collection Strategies
+
+**Strategy 1: A/B Testing (Recommended)**
+
+```python
+# Serve two responses randomly, track which performs better
+if random.random() < 0.5:
+    response = generate_response_a(query)
+    track_response("A", query, response, user_engagement)
+else:
+    response = generate_response_b(query)
+    track_response("B", query, response, user_engagement)
+
+# Analyze which response gets better engagement
+preference = analyze_engagement("A", "B")  # "A" or "B"
+```
+
+**Strategy 2: Explicit User Rating**
+
+```python
+# Show response, ask user to rate
+response = model.generate(query)
+user_rating = show_rating_ui(response)  # 1-5 stars
+
+# Compare with baseline or other responses
+if user_rating >= 4:
+    store_preference(response, "preferred")
+else:
+    store_preference(response, "less_preferred")
+```
+
+**Strategy 3: Implicit Feedback**
+
+```python
+# Track user behavior
+response = model.generate(query)
+show_response(response)
+
+# Track engagement signals
+signals = {
+    "clicked": user_clicked_response,
+    "time_spent": time_on_page,
+    "follow_up": user_asked_followup,
+    "satisfaction": user_satisfaction_score,
+}
+
+# Use signals to infer preference
+preference = infer_preference_from_signals(signals)
+```
+
+---
+
+#### Data Collection Best Practices
+
+**For Initial Training (Development):**
+
+- ✅ Generate 1000-5000 preference pairs
+- ✅ Use LLM-as-judge for quick labeling
+- ✅ Cover diverse instruction types
+- ✅ Include edge cases and failure modes
+- ✅ Validate with human raters on sample
+
+**For Production Collection:**
+
+- ✅ Collect continuously (not just once)
+- ✅ Use A/B testing for unbiased data
+- ✅ Respect user privacy (anonymize data)
+- ✅ Collect diverse queries (not just popular ones)
+- ✅ Monitor data quality
+
+**Data Quality Guidelines:**
+
+- ✅ **Diverse instructions** - Cover all use cases
+- ✅ **Clear preferences** - Obvious which is better
+- ✅ **Balanced pairs** - Mix of easy and hard comparisons
+- ✅ **Domain coverage** - All relevant domains represented
+- ✅ **Quality over quantity** - Better to have 1000 good pairs than 10000 bad ones
+
+---
+
+#### Continuous Learning Workflow
+
+**Complete Cycle:**
+
+```
+1. INITIAL TRAINING (Development)
+   - Generate preference pairs in dev
+   - Train DPO model
+   - Deploy to production
+   
+2. PRODUCTION COLLECTION
+   - Collect real user preferences
+   - Store preference pairs
+   - Monitor data quality
+   
+3. PERIODIC RETRAINING (Development)
+   - Combine dev + production data
+   - Retrain DPO model
+   - Evaluate improvements
+   
+4. REDEPLOYMENT
+   - Deploy updated model
+   - Monitor performance
+   - Repeat cycle
+```
+
+**Example Implementation:**
+
+```python
+# Step 1: Initial training (development)
+dev_preferences = generate_preference_pairs(instructions, model)
+dpo_trainer.train(dev_preferences)
+model.save_pretrained("./lora_adapter_dpo_v1")
+deploy_to_production("./lora_adapter_dpo_v1")
+
+# Step 2: Collect in production (over time)
+production_preferences = collect_preferences_from_production()
+
+# Step 3: Retrain periodically (development)
+combined_preferences = dev_preferences + production_preferences
+dpo_trainer.train(combined_preferences)
 model.save_pretrained("./lora_adapter_dpo_v2")
 deploy_to_production("./lora_adapter_dpo_v2")
 ```
+
+---
+
+#### Summary: Production vs Development Collection
+
+| Aspect | Development Generation | Production Collection |
+|--------|----------------------|---------------------|
+| **Speed** | Fast ✅ | Slower (real users) |
+| **Cost** | Low ✅ | Higher (A/B testing) |
+| **Realism** | Synthetic ❌ | Real-world ✅ |
+| **Scale** | Limited | Large scale ✅ |
+| **Privacy** | No concerns ✅ | Privacy needed |
+| **Best For** | Initial training ✅ | Continuous improvement ✅ |
+
+**Recommendation:**
+
+- **Start with development** - Generate initial preference pairs quickly
+- **Deploy to production** - Get real-world model
+- **Collect in production** - Gather actual user preferences
+- **Retrain periodically** - Combine both data sources
+- **Iterate** - Continuous improvement cycle
+
+**Key Insight:** Production data is more valuable but harder to collect. Development data is easier to generate but may not reflect real user needs. The best approach combines both!
 
 ---
 
