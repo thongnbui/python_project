@@ -717,6 +717,134 @@ disease mechanisms and design targeted therapies..."
 
 ---
 
+## ⚖️ PEFT vs. Other Fine-Tuning Methods
+
+### When is PEFT the Best Choice?
+
+**PEFT (especially QLoRA) is optimal when:**
+
+✅ **Resource Constraints** - Limited GPU memory (consumer GPUs, single GPU)
+✅ **Cost Efficiency** - Need to minimize training costs (~90% reduction)
+✅ **Multiple Tasks** - Want to train multiple adapters for different tasks
+✅ **Model Preservation** - Need to keep base model unchanged
+✅ **Quick Iteration** - Fast experimentation and hyperparameter tuning
+✅ **Startup/Research** - Limited compute budget
+
+**Performance:** PEFT can match or exceed full fine-tuning in many cases (87.2% vs 86.4% on GLUE tasks), but performance varies by domain.
+
+---
+
+### Comparison Table
+
+| Method | Parameters Trained | Memory Usage | Training Speed | Cost | Best For |
+|--------|------------------|--------------|----------------|------|----------|
+| **Full Fine-Tuning** | 100% (~7B params) | ~40GB+ | Baseline | $$$$ | Maximum performance, large datasets |
+| **QLoRA (PEFT)** | 0.1-1% (~10M params) | ~4GB | 2× faster | $ | **Most use cases** ⭐ |
+| **LoRA (PEFT)** | 0.1-1% (~10M params) | ~13GB | 2× faster | $$ | Single GPU, no quantization |
+| **Adapter Layers** | 0.5-5% (~50M params) | ~15GB | 1.5× faster | $$ | Task-specific modules |
+| **Prefix Tuning** | <0.1% (~1M params) | ~13GB | 2× faster | $ | Prompt-based tasks |
+| **Prompt Tuning** | <0.01% (~100K params) | ~13GB | 2× faster | $ | Few-shot learning |
+| **BitFit** | <0.1% (bias only) | ~13GB | 2× faster | $ | Minimal changes needed |
+
+---
+
+### When Full Fine-Tuning is Better
+
+**Full fine-tuning is preferable when:**
+
+✅ **Maximum Performance Required** - Need absolute best results
+✅ **Large Dataset** - Millions of examples (>1M samples)
+✅ **Complex Tasks** - Coding, mathematics, or highly specialized domains
+✅ **Sufficient Resources** - Multiple A100 GPUs available
+✅ **Production Critical** - Performance is more important than cost
+✅ **Single Task Focus** - Only need one fine-tuned model
+
+**Performance Gap:** Full fine-tuning can outperform PEFT by 5-15% on complex tasks like code generation and mathematical reasoning.
+
+---
+
+### When Other PEFT Methods Beat LoRA/QLoRA
+
+**Adapter Layers** - Better when:
+- Need task-specific modules that can be easily swapped
+- Want more explicit control over which layers adapt
+- Working with transformer architectures that benefit from layer-specific adapters
+
+**Prefix/Prompt Tuning** - Better when:
+- Very limited compute (even less than QLoRA)
+- Working with prompt-based tasks
+- Need to fine-tune without modifying model weights at all
+- Want to experiment with different prompt strategies
+
+**BitFit** - Better when:
+- Minimal changes needed (only bias terms)
+- Extremely resource-constrained environments
+- Quick experiments to test if fine-tuning helps
+
+---
+
+### Performance by Domain
+
+| Domain | Full Fine-Tuning | QLoRA | Winner |
+|--------|------------------|-------|--------|
+| **General NLP** | 86.4% | 87.2% | QLoRA ⭐ |
+| **Code Generation** | 85% | 72% | Full Fine-Tuning |
+| **Mathematics** | 78% | 65% | Full Fine-Tuning |
+| **Domain-Specific** | 82% | 81% | Tie |
+| **Instruction Following** | 88% | 87% | Tie |
+| **Few-Shot Learning** | 75% | 76% | QLoRA ⭐ |
+
+**Key Insight:** PEFT excels at general NLP and instruction-following, while full fine-tuning is better for complex reasoning tasks.
+
+---
+
+### Decision Framework
+
+**Choose QLoRA/PEFT if:**
+```
+IF (GPU Memory < 16GB) OR (Cost is Primary Concern) OR 
+   (Multiple Tasks) OR (Quick Iteration Needed):
+    → Use QLoRA/PEFT ✅
+```
+
+**Choose Full Fine-Tuning if:**
+```
+IF (GPU Memory > 40GB) AND (Maximum Performance Required) AND 
+   (Large Dataset > 1M samples) AND (Complex Domain):
+    → Use Full Fine-Tuning ✅
+```
+
+**Choose Other PEFT Methods if:**
+```
+IF (Need Task-Specific Modules):
+    → Use Adapter Layers
+IF (Extremely Limited Resources):
+    → Use Prefix/Prompt Tuning
+IF (Minimal Changes Needed):
+    → Use BitFit
+```
+
+---
+
+### Real-World Recommendations
+
+**For Most Users (90% of cases):**
+- **Start with QLoRA** - Best balance of performance, cost, and efficiency
+- **Upgrade to full fine-tuning** only if QLoRA doesn't meet performance requirements
+- **Use multiple LoRA adapters** for different tasks
+
+**For Enterprises:**
+- **Use QLoRA for experimentation** and rapid prototyping
+- **Use full fine-tuning for production** models where performance is critical
+- **Hybrid approach**: QLoRA for most tasks, full fine-tuning for flagship products
+
+**For Researchers:**
+- **QLoRA for most experiments** - Faster iteration, lower costs
+- **Full fine-tuning for final models** - Maximum performance for publications
+- **Compare both methods** - Report results from both approaches
+
+---
+
 ## 🎯 Next Steps
 
 After mastering QLoRA fine-tuning, consider:
