@@ -402,12 +402,15 @@ Only expand if:
 - You're fine-tuning for very complex reasoning tasks
 
 # Prepare model for training
+```
 model = prepare_model_for_kbit_training(model)
-
+```
 # Add LoRA adapters
+```
 model = get_peft_model(model, lora_config)
-
+```
 # Print trainable parameters
+```
 model.print_trainable_parameters()
 ```
 
