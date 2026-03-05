@@ -63,6 +63,71 @@ This project demonstrates how to efficiently fine-tune large language models usi
 
 ## 🏗️ Architecture
 
+### What is Quantization?
+
+**Quantization** is a technique that reduces the precision of model weights to use less memory and compute.
+
+#### Understanding Precision Levels
+
+| Precision | Bits per Weight | Memory (7B Model) | Example Values |
+|-----------|----------------|-------------------|----------------|
+| **FP32** (Full Precision) | 32 bits | ~28GB | 0.12345678901234567890 |
+| **FP16** (Half Precision) | 16 bits | ~14GB | 0.12346 |
+| **BF16** (Brain Float) | 16 bits | ~14GB | 0.12346 |
+| **INT8** (8-bit) | 8 bits | ~7GB | 0.123 |
+| **INT4** (4-bit) | 4 bits | ~4GB | 0.12 |
+
+**How Quantization Works:**
+
+```
+Original Weight (FP16):  0.123456789
+         ↓
+Quantization Process
+         ↓
+Quantized Weight (4-bit): 0.12
+```
+
+**Key Insight:** Instead of storing weights as 16-bit floating-point numbers, quantization stores them as 4-bit integers, reducing memory by 4× with minimal accuracy loss.
+
+#### Why Quantization Works
+
+1. **Neural networks are robust** - Small precision losses don't significantly impact performance
+2. **Weights cluster** - Most weights are near zero, so fewer bits can represent them efficiently
+3. **Activation quantization** - Can quantize activations during inference for even more savings
+4. **Modern techniques** - NF4 quantization format is optimized for neural networks
+
+#### Types of Quantization
+
+**Post-Training Quantization (PTQ):**
+- Quantize model after training
+- Fast and easy
+- Used in QLoRA (quantize base model, train adapters)
+
+**Quantization-Aware Training (QAT):**
+- Train model with quantization in mind
+- Better accuracy but slower
+- Used in some specialized scenarios
+
+**4-bit Quantization (NF4):**
+- Special format optimized for neural networks
+- Used in QLoRA
+- Provides best balance of compression and accuracy
+
+#### Memory Savings Example
+
+For a 7B parameter model:
+
+```
+FP16 Model:     7B × 2 bytes = 14GB
+4-bit Model:    7B × 0.5 bytes = 3.5GB
+
+Savings: 75% reduction (14GB → 3.5GB)
+```
+
+**This is why QLoRA can fit on a single T4 GPU (16GB) instead of requiring multiple A100 GPUs!**
+
+---
+
 ### QLoRA Fine-Tuning Architecture
 
 ```
@@ -136,10 +201,11 @@ Better Domain Answer
 
 #### Key Concepts
 
-1. **4-bit Quantization** - Reduce model precision from FP16 to 4-bit integers
-2. **BitsAndBytes Integration** - Use BitsAndBytes library for quantization
+1. **4-bit Quantization** - Reduce model precision from FP16 to 4-bit integers (see [Quantization explanation](#what-is-quantization) above)
+2. **BitsAndBytes Integration** - Use BitsAndBytes library for efficient quantization
 3. **Model Loading** - Load base model with quantization config
 4. **Memory Optimization** - Enable efficient memory usage for training
+5. **NF4 Format** - Neural network-optimized 4-bit quantization format
 
 ---
 
@@ -734,13 +800,43 @@ disease mechanisms and design targeted therapies..."
 
 ---
 
+### QLoRA vs LoRA: Key Differences
+
+**QLoRA = LoRA + 4-bit Quantization**
+
+| Aspect | LoRA | QLoRA |
+|--------|------|-------|
+| **Base Model Format** | FP16/BF16 (~13GB for 7B) | 4-bit quantized (~4GB for 7B) |
+| **Memory Usage** | ~13GB | ~4GB (3× reduction) |
+| **Parameters Trained** | Same (~0.1-1%) | Same (~0.1-1%) |
+| **Training Speed** | Same (2× faster than full FT) | Same (2× faster than full FT) |
+| **Performance** | Baseline | Matches LoRA (no loss) |
+| **GPU Requirements** | T4/V100 (16GB+) | T4/V100 (8GB+) |
+| **Best For** | When quantization not needed | **Most use cases** ⭐ |
+
+**Key Insight:** QLoRA is essentially LoRA with quantization added. It provides the same performance as LoRA but uses 3× less memory, making it accessible on smaller GPUs.
+
+**When to use LoRA instead of QLoRA:**
+- ✅ Already have sufficient GPU memory (16GB+)
+- ✅ Want to avoid any potential quantization artifacts
+- ✅ Need maximum precision for research/comparison
+- ✅ Working with models that don't quantize well
+
+**When to use QLoRA (recommended):**
+- ✅ Limited GPU memory (<16GB)
+- ✅ Want maximum efficiency
+- ✅ Training on consumer GPUs
+- ✅ **Most practical use cases** ⭐
+
+---
+
 ### Comparison Table
 
 | Method | Parameters Trained | Memory Usage | Training Speed | Cost | Best For |
 |--------|------------------|--------------|----------------|------|----------|
 | **Full Fine-Tuning** | 100% (~7B params) | ~40GB+ | Baseline | $$$$ | Maximum performance, large datasets |
 | **QLoRA (PEFT)** | 0.1-1% (~10M params) | ~4GB | 2× faster | $ | **Most use cases** ⭐ |
-| **LoRA (PEFT)** | 0.1-1% (~10M params) | ~13GB | 2× faster | $$ | Single GPU, no quantization |
+| **LoRA (PEFT)** | 0.1-1% (~10M params) | ~13GB | 2× faster | $$ | Single GPU, no quantization needed |
 | **Adapter Layers** | 0.5-5% (~50M params) | ~15GB | 1.5× faster | $$ | Task-specific modules |
 | **Prefix Tuning** | <0.1% (~1M params) | ~13GB | 2× faster | $ | Prompt-based tasks |
 | **Prompt Tuning** | <0.01% (~100K params) | ~13GB | 2× faster | $ | Few-shot learning |
@@ -799,6 +895,20 @@ disease mechanisms and design targeted therapies..."
 ---
 
 ### Decision Framework
+
+**Choose QLoRA if:**
+```
+IF (GPU Memory < 16GB) OR (Cost is Primary Concern) OR 
+   (Multiple Tasks) OR (Quick Iteration Needed):
+    → Use QLoRA ✅ (Recommended for most cases)
+```
+
+**Choose LoRA if:**
+```
+IF (GPU Memory >= 16GB) AND (Want to Avoid Quantization) AND
+   (Need Maximum Precision):
+    → Use LoRA ✅
+```
 
 **Choose QLoRA/PEFT if:**
 ```
