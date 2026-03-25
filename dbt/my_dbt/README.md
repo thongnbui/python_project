@@ -111,18 +111,12 @@ dbt for this repo is meant to run from the **Python 3.12 virtualenv** under the 
 
 | Location | Path |
 |----------|------|
-| Virtualenv | `/Users/thongbui/python_project/dbt/venv312` |
+| Virtualenv | `dbt/venv312` |
 
 Activate it **before** `dbt` commands (from `dbt/my_dbt`):
 
 ```bash
 source ../venv312/bin/activate
-```
-
-Or with the absolute path:
-
-```bash
-source /Users/thongbui/python_project/dbt/venv312/bin/activate
 ```
 
 ## Common commands
