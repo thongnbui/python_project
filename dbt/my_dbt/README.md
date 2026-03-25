@@ -156,4 +156,7 @@ dbt compile -s table_b -t prod
 
 ## Summary
 
-**my_dbt** wires **`dbt_project.yml`** to **`models/example/`** (SQL + **`schema.yml`**) and **`models/example/sources.yml`** (source **freshness** on the **`raw_example_events`** seed). **`tests/`** holds singular checks including **48-hour** recency on **`ingested_at`**. Activate **`dbt/venv312`**, configure the **`my_dbt`** profile, then use **`dbt seed`**, **`dbt source freshness`**, **`dbt build`**, or **`dbt test`** as needed.
+- **Project layout** — `dbt_project.yml` drives the project; models live under `models/example/` (`.sql` + `schema.yml`); `models/example/sources.yml` defines the `raw_example_events` source and its **freshness** (backed by the seed).
+- **Tests** — `tests/` includes singular SQL checks, including **48-hour** recency on `ingested_at` for `my_first_dbt_model`.
+- **Setup** — Activate `dbt/venv312` and configure the `my_dbt` profile in `~/.dbt/profiles.yml`.
+- **Commands** — Use `dbt seed`, `dbt source freshness`, `dbt build`, or `dbt test` as needed.
