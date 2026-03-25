@@ -150,7 +150,7 @@ dbt compile -s table_b -t prod
 
 - **`-s table_b`** (`--select`) — Limits which nodes are included. `table_b` is a [selector](https://docs.getdbt.com/reference/node-selection/syntax): usually a model name or path-style selector. If nothing matches, dbt reports a selection error.
 
-- **`-t prod`** (`--target`) — Chooses the named **output** under your profile (e.g. in `~/.dbt/profiles.yml` for `profile: my_dbt`). Typical setups define `dev` and `prod` with different projects, datasets, schemas, or credentials. Omitting `-t` uses the profile’s default `target`.
+- **`-t prod`** (`--target`) — Chooses the named **output** under your profile (e.g. in `~/.dbt/profiles.yml` for `profile: my_dbt`). Typical setups define `dev` and `prod` with different projects, datasets, schemas, or credentials. Omitting `-t` uses whatever **`target:`** is set to in that profile (often **`dev`**; not defined in this repo—check your local `profiles.yml`).
 
 **Contrast:** `dbt run -s table_b -t prod` uses the same selection and target but **executes** the SQL and materializes objects in the warehouse for `prod`.
 
