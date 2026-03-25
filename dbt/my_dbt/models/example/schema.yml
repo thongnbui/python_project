@@ -1,0 +1,57 @@
+
+version: 2
+
+models:
+  - name: my_first_dbt_model
+    description: "Starter model with inline source rows; null ids are filtered for data quality"
+    columns:
+      - name: id
+        description: "Primary key after excluding nulls"
+        data_tests:
+          - not_null
+          - unique
+          - accepted_values:
+              values: [1]
+              quote: false
+              config:
+                severity: error
+      - name: ingested_at
+        description: "Warehouse load time; used for recency / freshness singular tests"
+
+  - name: my_second_dbt_model
+    description: "Downstream model selecting id = 1 from my_first_dbt_model"
+    columns:
+      - name: id
+        description: "Must equal 1; must exist in my_first_dbt_model"
+        data_tests:
+          - not_null
+          - unique
+          - accepted_values:
+              values: [1]
+              quote: false
+          - relationships:
+              to: ref('my_first_dbt_model')
+              field: id
+
+unit_tests:
+  - name: second_model_keeps_only_id_one
+    model: my_second_dbt_model
+    description: "Where id = 1 should pass through a single row"
+    given:
+      - input: ref('my_first_dbt_model')
+        rows:
+          - {id: 1}
+          - {id: 2}
+    expect:
+      rows:
+        - {id: 1}
+  - name: second_model_empty_when_no_id_one
+    model: my_second_dbt_model
+    description: "No matching rows yields an empty result"
+    given:
+      - input: ref('my_first_dbt_model')
+        rows:
+          - {id: 2}
+          - {id: 3}
+    expect:
+      rows: []
