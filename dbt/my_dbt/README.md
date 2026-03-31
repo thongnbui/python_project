@@ -29,6 +29,207 @@ Warehouse credentials are **not** in this repo. They live in your dbt profile (t
 
 Paths in the middle rows come from `dbt_project.yml` (`model-paths`, `analysis-paths`, etc.). This project uses **`models/`**, **`tests/`**, **`seeds/`**, and **`models/example/sources.yml`**; other dirs are optional placeholders.
 
+## Code examples by file type
+
+Short, runnable-style snippets show how each artifact behaves: YAML attaches metadata and tests; SQL models compile Jinja; seeds load CSVs; singular tests are queries that must return zero rows.
+
+### `dbt_project.yml` — project name, profile, paths, folder defaults
+
+```yaml
+name: 'my_dbt'
+version: '1.0.0'
+profile: 'my_dbt'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+models:
+  my_dbt:
+    example:
+      +materialized: view
+```
+
+Everything under `models/example/` inherits `materialized: view` unless a model overrides with `{{ config(...) }}`.
+
+### Models — `models/**/*.sql`
+
+**Per-model config and inline SQL** (`my_first_dbt_model.sql`):
+
+```sql
+{{ config(materialized='table') }}
+
+with source_data as (
+    select 1 as id
+    union all
+    select null as id
+)
+
+select
+    id,
+    current_timestamp() as ingested_at
+from source_data
+where id is not null
+```
+
+**Dependency on another model** (`my_second_dbt_model.sql`):
+
+```sql
+select id
+from {{ ref('my_first_dbt_model') }}
+where id = 1
+```
+
+`ref()` builds the DAG: dbt runs `my_first_dbt_model` before `my_second_dbt_model`.
+
+### Model metadata and tests — `models/**/*.yml` (e.g. `schema.yml`)
+
+`name:` must match the model’s filename (without `.sql`). Generic **data tests** live under `columns[].data_tests`. **Unit tests** use the top-level `unit_tests:` key.
+
+```yaml
+version: 2
+
+models:
+  - name: my_first_dbt_model
+    columns:
+      - name: id
+        data_tests:
+          - not_null
+          - unique
+  - name: my_second_dbt_model
+    columns:
+      - name: id
+        data_tests:
+          - relationships:
+              to: ref('my_first_dbt_model')
+              field: id
+
+unit_tests:
+  - name: second_model_keeps_only_id_one
+    model: my_second_dbt_model
+    given:
+      - input: ref('my_first_dbt_model')
+        rows:
+          - {id: 1}
+          - {id: 2}
+    expect:
+      rows:
+        - {id: 1}
+```
+
+Run data tests with `dbt test`; unit tests only with `dbt test --select resource_type:unit_test`.
+
+### Sources — `models/**/sources.yml`
+
+Declare warehouse tables dbt does not own, then reference them with `source()`. Freshness uses `loaded_at_field` and `warn_after` / `error_after`.
+
+```yaml
+version: 2
+
+sources:
+  - name: example
+    database: "{{ target.database }}"
+    schema: "{{ target.schema }}"
+    tables:
+      - name: raw_example_events
+        config:
+          loaded_at_field: loaded_at
+          freshness:
+            warn_after: {count: 7, period: day}
+            error_after: {count: 36500, period: day}
+```
+
+In a model: `from {{ source('example', 'raw_example_events') }}`. Check freshness: `dbt source freshness`.
+
+### Seeds — `seeds/*.csv`
+
+CSV files loaded with `dbt seed` become tables you can `ref()` (often named like the file). This project’s demo seed:
+
+```csv
+id,loaded_at
+1,2025-03-25 18:00:00
+2,2025-03-25 12:00:00
+```
+
+### Singular tests — `tests/*.sql`
+
+A **singular** test is SQL that should return **no rows** if the test passes. Use `ref()` like a model.
+
+```sql
+select 1 as stale
+from (
+    select max(ingested_at) as max_ingested
+    from {{ ref('my_first_dbt_model') }}
+)
+where max_ingested < timestamp_sub(current_timestamp(), interval 48 hour)
+```
+
+```sql
+select *
+from {{ ref('my_second_dbt_model') }}
+where id != 1
+```
+
+Run with `dbt test` (or `--select test_name`).
+
+### Analyses — `analyses/*.sql` (optional)
+
+Ad-hoc SQL that **compiles** with project context but is **not** executed as part of `dbt run`. Use `ref()` to explore compiled SQL via `dbt compile`.
+
+```sql
+-- analyses/event_counts.sql
+select id, count(*) as n
+from {{ ref('my_first_dbt_model') }}
+group by 1
+```
+
+### Macros — `macros/*.sql` (optional)
+
+Reusable Jinja, expanded at compile time.
+
+```sql
+{% macro cents_to_dollars(column_name) %}
+    ({{ column_name }} / 100.0)
+{% endmacro %}
+```
+
+Usage in a model: `select {{ cents_to_dollars('amount_cents') }} as amount_usd`.
+
+### Snapshots — `snapshots/*.sql` (optional)
+
+Track slowly changing dimensions; run with `dbt snapshot`.
+
+```sql
+{% snapshot customers_snapshot %}
+
+{{
+    config(
+      target_database='analytics',
+      target_schema='snapshots',
+      unique_key='id',
+      strategy='timestamp',
+      updated_at='updated_at',
+    )
+}}
+
+select * from {{ source('raw', 'customers') }}
+
+{% endsnapshot %}
+```
+
+### Packages — `packages.yml` (optional, project root)
+
+Declare [package dependencies](https://docs.getdbt.com/docs/build/packages); `dbt deps` installs them under `dbt_packages/`.
+
+```yaml
+packages:
+  - package: dbt-labs/dbt_utils
+    version: 1.3.0
+```
+
 ## How `models/example/` is used
 
 - **Discovery** — dbt walks everything under `model-paths` (here `models/`). Each **`*.sql`** file is a **model**: a node in the DAG that `dbt run` / `dbt build` can materialize. The **`example/`** segment is only a subdirectory for organization; it could be renamed (e.g. `staging/`, `marts/`) and you would update `dbt_project.yml` if you still want folder-specific config under `models: my_dbt: …`.
@@ -156,6 +357,7 @@ dbt compile -s table_b -t prod
 
 ## Summary
 
+- **Code examples** — See [Code examples by file type](#code-examples-by-file-type) for project YAML, model SQL, schema and sources YAML, seeds, singular tests, optional analyses, macros, snapshots, and `packages.yml`.
 - **Project layout** — `dbt_project.yml` drives the project; models live under `models/example/` (`.sql` + `schema.yml`); `models/example/sources.yml` defines the `raw_example_events` source and its **freshness** (backed by the seed).
 - **Tests** — `tests/` includes singular SQL checks, including **48-hour** recency on `ingested_at` for `my_first_dbt_model`.
 - **Setup** — Activate `dbt/venv312` and configure the `my_dbt` profile in `~/.dbt/profiles.yml`.
