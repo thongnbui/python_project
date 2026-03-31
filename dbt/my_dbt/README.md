@@ -15,7 +15,7 @@ Warehouse credentials are **not** in this repo. They live in your dbt profile (t
 | Path | Role |
 |------|------|
 | `dbt_project.yml` | Project name, profile, paths, default model config |
-| `models/example/*.sql` | Example models (see below) |
+| `models/example/*.sql` | Example models ([Code examples](#code-examples-by-file-type)) |
 | `models/example/schema.yml` | Model/column docs and data tests |
 | `models/example/sources.yml` | [Sources](https://docs.getdbt.com/docs/build/sources): external tables + **freshness** |
 | `seeds/raw_example_events.csv` | Demo seed for `source()` / `dbt source freshness` |
@@ -31,7 +31,7 @@ Paths in the middle rows come from `dbt_project.yml` (`model-paths`, `analysis-p
 
 ## Code examples by file type
 
-Short, runnable-style snippets show how each artifact behaves: YAML attaches metadata and tests; SQL models compile Jinja; seeds load CSVs; singular tests are queries that must return zero rows.
+Short, runnable-style snippets show how each artifact behaves: YAML attaches metadata and tests; SQL models compile Jinja; seeds load CSVs; singular tests are queries that must return zero rows. The **`models/example/`** models below are the same files in this repo—they illustrate an end-to-end path for `dbt run` and `dbt test`.
 
 ### `dbt_project.yml` — project name, profile, paths, folder defaults
 
@@ -85,6 +85,11 @@ where id = 1
 
 `ref()` builds the DAG: dbt runs `my_first_dbt_model` before `my_second_dbt_model`.
 
+**What these example models do**
+
+- **`my_first_dbt_model`** — Builds a small inline dataset (including a null `id` removed with `where id is not null`). Adds **`ingested_at`** with **`current_timestamp()`** for recency checks. Materializes as a **table** via `{{ config(materialized='table') }}`, overriding the folder default of `view` from `dbt_project.yml`.
+- **`my_second_dbt_model`** — Selects **`id`** from the first model with **`{{ ref('my_first_dbt_model') }}`** and keeps `id = 1`. dbt enforces **build order**: the first model runs before the second.
+
 ### Model metadata and tests — `models/**/*.yml` (e.g. `schema.yml`)
 
 `name:` must match the model’s filename (without `.sql`). Generic **data tests** live under `columns[].data_tests`. **Unit tests** use the top-level `unit_tests:` key.
@@ -122,6 +127,18 @@ unit_tests:
 
 Run data tests with `dbt test`; unit tests only with `dbt test --select resource_type:unit_test`.
 
+**Tests in this repo’s `schema.yml`**
+
+On **`id`**, generic **data tests** include `not_null`, `unique`, `accepted_values`, and (on the second model) **`relationships`** to `my_first_dbt_model.id`. Singular SQL checks live under **`tests/`** (see **Singular tests** — `tests/*.sql` later in this section).
+
+**Unit tests** ([docs](https://docs.getdbt.com/docs/build/unit-tests)) mock upstream **`ref()`** inputs and assert the model’s output without production data. This project defines them in **`models/example/schema.yml`** under the top-level **`unit_tests:`** key (required in current dbt versions; nesting under `models:` is deprecated). They target **`my_second_dbt_model`**: one case keeps only `id = 1` when upstream has `1` and `2`; another expects **no rows** when upstream has no `id = 1`. `my_first_dbt_model` has no `ref()` inputs to mock, so it is covered by **data tests** and inline SQL rather than unit tests here.
+
+Run only unit tests:
+
+```bash
+dbt test --select resource_type:unit_test
+```
+
 ### Sources — `models/**/sources.yml`
 
 Declare warehouse tables dbt does not own, then reference them with `source()`. Freshness uses `loaded_at_field` and `warn_after` / `error_after`.
@@ -143,6 +160,15 @@ sources:
 ```
 
 In a model: `from {{ source('example', 'raw_example_events') }}`. Check freshness: `dbt source freshness`.
+
+**Source freshness in this repo** ([docs](https://docs.getdbt.com/docs/deploy/source-freshness)) — The source **`example.raw_example_events`** points at the seed table **`raw_example_events`** (same target database/schema as your profile). **`config.loaded_at_field`** is **`loaded_at`**; **`config.freshness`** compares `max(loaded_at)` at run time to **`warn_after`** / **`error_after`**. Load the seed first, then check:
+
+```bash
+dbt seed
+dbt source freshness
+```
+
+**`warn_after`** uses a short window so stale demo data often **warns**; **`error_after`** is very wide so the sample CSV does not fail CI as it ages—**tighten both in production** and keep **`loaded_at`** realistic (or refresh the seed).
 
 ### Seeds — `seeds/*.csv`
 
@@ -174,6 +200,8 @@ where id != 1
 ```
 
 Run with `dbt test` (or `--select test_name`).
+
+The file **`tests/assert_freshness_my_first_dbt_model.sql`** applies the other freshness pattern: it fails if **`max(ingested_at)`** on **`my_first_dbt_model`** is older than **48 hours** (run after **`dbt run`** so the table exists). Adjust the interval to match your SLA.
 
 ### Analyses — `analyses/*.sql` (optional)
 
@@ -260,52 +288,6 @@ Optional folders stay empty until you add files; this project also uses **`seeds
 - Everything under `models/example/` is configured as **`view`** by default (`+materialized: view`).
 - **Per-model overrides** use `{{ config(...) }}` at the top of a model file. In this project, `my_first_dbt_model` sets `materialized='table'`, so that model builds as a **table** even though the folder default is views.
 
-## Example models
-
-### `my_first_dbt_model`
-
-- Builds a small inline dataset (including a null `id` filtered out with `where id is not null`).
-- Adds **`ingested_at`** with **`current_timestamp()`** for recency checks.
-- Materializes as a **table** via `{{ config(materialized='table') }}`.
-
-### `my_second_dbt_model`
-
-- Selects **`id`** from the first model using **`{{ ref('my_first_dbt_model') }}`** and filters to `id = 1`.
-- dbt enforces **build order**: the first model runs before the second.
-
-### Tests in `schema.yml`
-
-Generic **data tests** on `id` include `not_null`, `unique`, `accepted_values`, and (on the second model) **`relationships`** to the first model. See **`tests/`** for singular SQL tests.
-
-### Freshness
-
-Two patterns are configured:
-
-1. **Source freshness** ([docs](https://docs.getdbt.com/docs/deploy/source-freshness)) — In **`models/example/sources.yml`**, the source **`example.raw_example_events`** points at the seed table **`raw_example_events`** (same target database/schema). **`config.loaded_at_field`** is **`loaded_at`**; **`config.freshness`** sets **`warn_after`** / **`error_after`** vs `max(loaded_at)` at run time. Load the seed first, then run:
-
-   ```bash
-   dbt seed
-   dbt source freshness
-   ```
-
-   **`warn_after`** uses a short window so stale demo data often **warns**; **`error_after`** is set very wide so the sample CSV does not fail CI as it ages—**tighten both in production** and keep **`loaded_at`** realistic (or refresh the seed).
-
-2. **Model recency (singular test)** — **`tests/assert_freshness_my_first_dbt_model.sql`** fails if **`max(ingested_at)`** on **`my_first_dbt_model`** is older than **48 hours** (run after **`dbt run`** so the table exists). Adjust the interval in that file to match your SLA.
-
-### Unit tests
-
-[Unit tests](https://docs.getdbt.com/docs/build/unit-tests) mock upstream **`ref()`** inputs and assert the model’s output without relying on production data. This project defines them in **`models/example/schema.yml`** under the top-level **`unit_tests:`** key (required in current dbt versions; nesting under `models:` is deprecated).
-
-They target **`my_second_dbt_model`**, which depends on **`ref('my_first_dbt_model')`**: one case keeps only `id = 1`, another expects **no rows** when upstream has no `id = 1`.
-
-Run only unit tests:
-
-```bash
-dbt test --select resource_type:unit_test
-```
-
-`my_first_dbt_model` has no `ref()` inputs to mock, so it is covered by **data tests** and inline SQL rather than unit tests here.
-
 ## Python environment (dbt CLI)
 
 dbt for this repo is meant to run from the **Python 3.12 virtualenv** under the parent **`dbt/`** directory, not the project-root `venv312`:
@@ -357,7 +339,7 @@ dbt compile -s table_b -t prod
 
 ## Summary
 
-- **Code examples** — See [Code examples by file type](#code-examples-by-file-type) for project YAML, model SQL, schema and sources YAML, seeds, singular tests, optional analyses, macros, snapshots, and `packages.yml`.
+- **Code examples** — See [Code examples by file type](#code-examples-by-file-type) for project YAML, model SQL, schema and sources YAML, seeds, singular tests, optional analyses, macros, snapshots, and `packages.yml`, plus how this repo’s **`models/example/`** models, tests, source freshness, and unit tests fit together.
 - **Project layout** — `dbt_project.yml` drives the project; models live under `models/example/` (`.sql` + `schema.yml`); `models/example/sources.yml` defines the `raw_example_events` source and its **freshness** (backed by the seed).
 - **Tests** — `tests/` includes singular SQL checks, including **48-hour** recency on `ingested_at` for `my_first_dbt_model`.
 - **Setup** — Activate `dbt/venv312` and configure the `my_dbt` profile in `~/.dbt/profiles.yml`.
