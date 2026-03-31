@@ -2,6 +2,43 @@
 
 This directory is a **dbt Core project** named `my_dbt`. dbt turns SQL files in `models/` into tables or views in your warehouse and lets you document and test them. This repo ships with the usual starter **example** models so you can run `dbt run` and `dbt test` end-to-end once your profile is configured.
 
+The diagram below summarizes how project files, the model DAG, seeds, tests, and warehouse credentials fit together.
+
+```mermaid
+flowchart TB
+  subgraph repo["my_dbt repo"]
+    yml["dbt_project.yml"]
+    m1["my_first_dbt_model.sql"]
+    m2["my_second_dbt_model.sql"]
+    meta["schema.yml + sources.yml"]
+    seed["seeds/raw_example_events.csv"]
+    st["tests/*.sql"]
+  end
+
+  subgraph dag["Model DAG"]
+    A["my_first_dbt_model"]
+    B["my_second_dbt_model"]
+    A -->|"ref()"| B
+  end
+
+  prof["~/.dbt/profiles.yml"]
+  wh[("Warehouse — target from profile: my_dbt")]
+
+  prof --> wh
+  yml --> m1
+  m1 --> A
+  m2 --> B
+  A --> wh
+  B --> wh
+  seed -->|"dbt seed"| wh
+  meta -.->|"docs, generic + unit tests"| A
+  meta -.->|"docs, generic + unit tests"| B
+  st -.->|"singular tests"| A
+  st -.->|"singular tests"| B
+```
+
+Solid arrows are **build** paths (`dbt run` materializes the DAG; `dbt seed` loads the CSV). Dotted arrows are **validation** (`dbt test`). **Source freshness** (`dbt source freshness`) uses `sources.yml` against the `raw_example_events` table in the warehouse after the seed is loaded.
+
 ## How it fits together
 
 1. **`dbt_project.yml`** defines the project name (`my_dbt`), which **profile** to use (`profile: my_dbt`), and where dbt looks for models, seeds, tests, macros, and snapshots.
