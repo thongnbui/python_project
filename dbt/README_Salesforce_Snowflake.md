@@ -7,34 +7,34 @@ This guide outlines how to combine **Salesforce** (CRM source), **Snowflake** (w
 ```mermaid
 flowchart TB
   subgraph sf["Salesforce"]
-    CRM["CRM objects — Account, Contact, Opportunity, ..."]
+    CRM["CRM objects"]
   end
 
-  subgraph ingest["Ingestion — not dbt"]
-    ELT["ELT — Fivetran, Airbyte, Stitch, partner connectors, ..."]
+  subgraph ingest["Ingestion not dbt"]
+    ELT["ELT connector"]
   end
 
-  RAW[("Snowflake — RAW / LANDING")]
+  RAW["Snowflake raw landing"]
 
   subgraph dbt["dbt in Snowflake"]
     SRC["sources.yml"]
-    STG["Staging + intermediate models"]
-    MRT["Marts / analytics models"]
+    STG["Staging and intermediate"]
+    MRT["Marts"]
     SRC --> STG --> MRT
   end
 
   subgraph out["Downstream"]
-    BI["BI — Looker, Mode, Hex, ..."]
-    REV["Optional — reverse ETL → Salesforce"]
+    BI["BI tools"]
+    REV["Reverse ETL to Salesforce"]
   end
 
   CRM --> ELT --> RAW
-  RAW -->|source()| SRC
+  RAW -->|dbt source| SRC
   MRT --> BI
   MRT --> REV
 ```
 
-**Legend:** **Ingestion** loads Salesforce-shaped tables into Snowflake. **dbt** reads them with `source()`, builds staging → marts, and you add **tests and docs** on those models. **Reverse ETL** (optional) syncs curated Snowflake data back to Salesforce (Hightouch, Census, etc.)—not part of core dbt.
+**Legend:** **Ingestion** loads Salesforce-shaped tables into Snowflake. The **dbt source** edge means those tables are read via the `source()` macro in dbt; then staging → marts, plus **tests and docs**. **Reverse ETL** (optional) syncs curated Snowflake data back to Salesforce (Hightouch, Census, etc.)—not part of core dbt.
 
 ---
 
