@@ -203,6 +203,20 @@ Tables such as `E1_MI` are **examples** — match **real** Snowflake `database.s
 2. **Materialization** — Often **`view`** for staging to reduce storage churn; use **`table`** if performance requires it.
 3. **Do not** duplicate heavy integration logic here if it already lives in procedures; **stage what the integration layer already produced**.
 
+### Which U8 source SQL informed Phase 4 examples?
+
+The Phase 4 `.sql` block is an **illustrative dbt model** (it is **not** pasted from a single Snowflake procedure). It was shaped using **table and column names** that appear in integration procedures under:
+
+`/Users/thongbui/open_issue/U8_WHSE/P1062_U8_SN0_to_UpdateGitSnowflake/STAGING/U8_INTEGRATIONS/procedures/`
+
+| dbt example file (Phase 4) | U8 procedure files that reference the same tables / columns (for naming and projections) | What was borrowed |
+|----------------------------|------------------------------------------------------------------------------------------|-------------------|
+| `stg_u8__e1_mi.sql` | `P742_E1_DS01_MERGE_MI.sql` | `E1_MI` as the integration target; columns `ds01_ii_id`, `ds01_id`, `ds01_name`, `ds01_isdeleted`; joins/keys involving `MI_ID` and `ds01_e1_ii` / `DS01_E1_II` |
+| `stg_u8__e1_mi.sql` | `P1105_E1_DS01_DS21_MERGE.sql` | `E1_MI` selected by `MI_ID` alongside `DS01_E1_II` for survivor / merge flows (confirms `E1_MI` as a first-class integration table) |
+| `dbt_project.yml` (staging `+materialized: view`) | *None* | dbt-only configuration; not derived from U8 SQL |
+
+**Before production:** confirm column names against **`DESCRIBE TABLE`** on `E1_MI` in Snowflake—procedure text may use identifiers that differ in case from your dbt `source()` (for example `E1MI` alias vs table name `E1_MI`).
+
 ### What the files look like (Phase 4)
 
 **Typical path:** `models/staging/stg_u8__e1_mi.sql` (prefix `stg_`, double underscore before entity name is a common convention).
