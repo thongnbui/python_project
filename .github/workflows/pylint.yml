@@ -1,6 +1,7 @@
 name: Pylint
 
-on: [push]
+# Disabled for now (was: on: [push]). Re-enable automatic runs by restoring `on: [push]`.
+on: workflow_dispatch
 
 jobs:
   build:
