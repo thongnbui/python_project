@@ -208,6 +208,24 @@ dbt docs generate && dbt docs serve
 
 ---
 
+## ELT / ETL tools — one-table comparison
+
+Prices change; use vendor sites for quotes. **dbt** is the **transform** layer (T), not a full extract/load tool.
+
+| Tool | Open source / free? | Typical cost pattern | Main benefits | Main tradeoffs | Prefer when |
+|------|---------------------|----------------------|---------------|----------------|-------------|
+| **Fivetran** | No — proprietary SaaS | Usage-based (e.g. MAR / usage tiers); enterprise deals | Managed, broad connectors, low pipeline maintenance | Cost scales with volume; less on-prem control | You want reliability and minimal ops; budget for SaaS |
+| **Airbyte** | **Yes** — OSS core; Cloud is paid | OSS self-host: no license (you pay infra + people); Cloud/enterprise: subscription | Large connector set; self-host or cloud; flexible | Self-host: you run upgrades, monitoring, incidents | Lower recurring $, VPC data residency, or need to fork connectors |
+| **Meltano** | **Yes** | OSS free; hosting + ops; support optional | Developer- / GitOps-friendly OSS stack | More DIY than turnkey SaaS | Engineering-led teams comfortable owning the platform |
+| **Stitch** | No | SaaS subscription / tiers | Simple SaaS ELT; quick start | Less deep customization than OSS Airbyte | Small team, common sources, want hosted simplicity |
+| **Matillion** | Mostly commercial products | Commercial (varies by product) | Strong Snowflake-centric options; visual flows in some products | Not free OSS for typical cloud ELT; product mix can confuse | You standardize on their product line + support |
+| **Informatica** (and similar enterprise iPaaS) | No | Enterprise license / subscription | Governance, broad integration beyond analytics | Cost and complexity | Enterprise integration + MDM + many non-warehouse targets |
+| **Cloud-native** (e.g. AWS Glue, Azure Data Factory, GCP pipelines) | No (vendor platform) | Pay-as-you-go + engineer time | IAM, billing, regions with one cloud | You still design/maintain pipelines; learning curve | Policy mandates single cloud; strong in-house cloud DE |
+| **dbt Core** | **Yes** | Free (warehouse compute still costs) | Versioned SQL transforms, tests, docs in warehouse | Does **not** extract/load from Salesforce by itself | You already land data in Snowflake and need the **T** in ELT |
+| **dbt Cloud** | No (hosted product) | Subscription | Scheduling, IDE, CI, observability for dbt | Adds vendor cost | Team wants hosted dbt ops vs self-running Core |
+
+---
+
 ## Further reading
 
 - [dbt + Snowflake](https://docs.getdbt.com/docs/core/connect-data-platform/snowflake-setup)
