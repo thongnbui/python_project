@@ -239,6 +239,22 @@ Replace `my_dbt` with your project name from `name:` at the top of `dbt_project.
 3. **Use `ref()`** only between **dbt models**; use **`source()`** for raw/integration inputs.
 4. **Materialization** — Often **`table`** or **`incremental`** for large marts (choose strategy with your warehouse’s strengths).
 
+### Notes: which U8 source SQL informed Phase 5 examples
+
+The Phase 5 `.sql` blocks are **illustrative dbt models** (they are **not** pasted from a single Snowflake procedure). They were shaped using **table and column names** that appear in integration procedures under:
+
+`/Users/thongbui/open_issue/U8_WHSE/P1062_U8_SN0_to_UpdateGitSnowflake/STAGING/U8_INTEGRATIONS/procedures/`
+
+| dbt example file (Phase 5) | U8 procedure files that reference the same tables / columns (for naming and joins) | What was borrowed |
+|----------------------------|-------------------------------------------------------------------------------------|-------------------|
+| `int_u8__e1_mi_with_ds01.sql` | `P742_E1_DS01_MERGE_MI.sql` | `E1_MI`, `ds01_e1_ii` / `DS01_E1_II`, `MI_ID`, `ds01_ii_id`, `ii_id`, `fk3__c`, Salesforce id/name/delete flags |
+| `int_u8__e1_mi_with_ds01.sql` | `P744_E1_DS01_21_MERGE_ALL.sql` | `DS01_E1_II`, `duplicate_group__c`, merge-ready / survivor vs non-survivor style fields |
+| `int_u8__e1_mi_with_ds01.sql` | `P1105_E1_DS01_DS21_MERGE.sql` | `DS01_E1_II`, `E1_MI`, lookups by `II_ID` / `MI_ID` across integration tables |
+| `mart_u8__e1_account_enriched.sql` | (same as intermediate) | Mart only **projects and filters** columns implied by those tables; no separate U8 file defines this exact `SELECT` |
+| `fct_u8__daily_snapshot.sql` | *None specific* | **Generic incremental pattern** only; add real keys, dates, and filters after you define a snapshot grain in Snowflake |
+
+**Before production:** confirm column names and join keys against **Snowflake DDL** (`DESCRIBE TABLE`) and your current procedure logic—U8 SQL uses mixed casing (`ds01_e1_ii` vs `DS01_E1_II`) depending on context; dbt models should match how objects are created in the warehouse.
+
 ### What the files look like (Phase 5)
 
 **Intermediate —** `models/intermediate/int_u8__e1_mi_with_ds01.sql`:
@@ -461,6 +477,22 @@ with DAG("u8_then_dbt", start_date=datetime(2026, 1, 1), schedule_interval="@dai
 create or replace view LEGACY_SCHEMA.DASHBOARD_E1_ACCOUNTS copy grants as
 select * from ANALYTICS_PROD.DBT_MARTS.MART_U8__E1_ACCOUNT_ENRICHED;
 ```
+
+---
+
+## After migration: do existing scripts need to change?
+
+**Usually: integration procedures do not; downstream consumers often do.** It depends which script you mean.
+
+| What | Change after dbt? | Why |
+|------|-------------------|-----|
+| **Snowflake procedures that build integration tables** (e.g. `E1_MI`, `DS01_E1_II`, merge jobs under `U8_INTEGRATIONS`) | **Typically no** | dbt **reads** those tables as **`source()`** inputs. They remain the **system of record** for that layer until you deliberately move logic into dbt. |
+| **BI tools, dashboards, ad-hoc reports, other SQL** that used old views or hand-written queries | **Yes, if** you want them on the new marts | Point them at **`mart_*`** tables/views (or at a **compatibility view** that selects from a mart so names stay stable). |
+| **Compatibility views** in Snowflake (`CREATE OR REPLACE VIEW old_name AS SELECT * FROM new_mart`) | **New objects** — optional | Lets you **avoid** editing every dashboard immediately: repoint the view once, or rename the view to match the old name. |
+| **Orchestration** (Airflow, Tasks, cron) | **Often yes (scheduling only)** | Add or order a step so **`dbt build`** runs **after** integration procedures finish. The **procedure SQL files** themselves may stay unchanged. |
+| **Procedures that must read dbt outputs** (uncommon) | **Yes** | Only if you design a flow where dbt builds an intermediate **then** a procedure consumes it. Document the dependency clearly to avoid circular logic. |
+
+**Summary:** dbt adds **new** views/tables **downstream** of your existing integration tables. You **do not** have to rewrite merge procedures to “call dbt.” You **do** update anything that should **read** from the new analytics layer (or swap in a view alias) when you cut over reporting.
 
 ---
 
