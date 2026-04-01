@@ -57,7 +57,7 @@ dbt is best at **versioned transformations** in the warehouse: **SQL models**, *
 ## Migration phases at a glance
 
 ```mermaid
-flowchart LR
+flowchart TB
   P0[Assess]
   P1[Scaffold dbt project]
   P2[profiles and targets]
@@ -68,7 +68,14 @@ flowchart LR
   P7[CI and environments]
   P8[Orchestrate and cutover]
 
-  P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7 --> P8
+  P0 --> P1
+  P1 --> P2
+  P2 --> P3
+  P3 --> P4
+  P4 --> P5
+  P5 --> P6
+  P6 --> P7
+  P7 --> P8
 ```
 
 ---
