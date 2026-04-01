@@ -27,9 +27,11 @@ Integration-heavy stacks (Snowflake **stored procedures**, merges, `CALL` chains
 
 ### When **skipping** or **deferring** dbt is reasonable
 
+Deferring is a valid choice when **any** of these apply—they mean dbt’s strengths (review, tests, catalog, ongoing ownership) matter less or are hard to sustain:
+
 - Reporting is light, few people write SQL, and **views + procedure outputs** are enough.
-- You don’t need git review, automated tests, or a data catalog.
-- The team doesn’t have capacity to **own** a dbt project and CI.
+- You **don’t need** the extra process: **git review** of analytics SQL, **automated data tests** on every change, or a **catalog** of documented tables/columns/lineage (dbt docs or similar). Ad-hoc SQL and manual validation are acceptable.
+- The team doesn’t have bandwidth to **own** ongoing work: maintaining models and tests in git, reviewing SQL changes, fixing failed runs, upgrading dbt/adapters, and keeping CI (secrets, workflows) healthy—not just a one-time prototype.
 
 Deferring dbt is a valid choice; adopt it when **analytics consumption** and **change frequency** justify the overhead.
 
