@@ -233,6 +233,23 @@ select
 from {{ source("u8_integrations", "E1_MI") }}
 ```
 
+### Other entities you can stage from the same U8 SQL
+
+Yes. The example only shows **`E1_MI`**. The procedures under `U8_INTEGRATIONS/procedures/` reference **other** Snowflake tables that are good candidates for **additional** staging models (`stg_u8__<table>.sql`), each with a `tables:` entry in `sources.yml` (and the same `database` / `schema` as your integration layer).
+
+| Integration table (examples) | Appears in procedures such as | Typical staging model name |
+|-----------------------------|------------------------------|----------------------------|
+| `E2_MI` | `P748_E2_DS01_MERGE_MI.sql`, `P9999_E2_DS01_MERGE_MI.sql`, `P1023_E2_DS21_MERGE_MI.sql` | `stg_u8__e2_mi.sql` |
+| `DS01_E1_II` | `P741_E1_DS01_MERGE_II.sql`, `P742_E1_DS01_MERGE_MI.sql`, `P744_E1_DS01_21_MERGE_ALL.sql`, `P1105_E1_DS01_DS21_MERGE.sql` | `stg_u8__ds01_e1_ii.sql` |
+| `DS21_E1_II` | `P1105_E1_DS01_DS21_MERGE.sql` | `stg_u8__ds21_e1_ii.sql` |
+| `DS01_E2_II` | `P748_E2_DS01_MERGE_MI.sql`, `P9999A_E2_DS01_MERGE_MI.sql` | `stg_u8__ds01_e2_ii.sql` |
+| `DS21_E2_II` | `P9999_E2_DS21_MERGE_MI.sql`, `P1023_E2_DS21_MERGE_MI.sql` | `stg_u8__ds21_e2_ii.sql` |
+| `DS01_E1_EGRESS` | `P1105_E1_DS01_DS21_MERGE.sql` | `stg_u8__ds01_e1_egress.sql` |
+
+Some flows also read **Salesforce mirror** tables (for example **`MIRROR_ACCOUNT`** in `P741_E1_DS01_MERGE_II.sql`, often under a different schema such as `U8_SALESFORCE0_PROD0`). Those are usually a **separate** `source` in dbt (not `u8_integrations`), unless you intentionally unify them in one YAML source.
+
+Add only the entities you need for **analytics** or **tests**; you do not have to model every table referenced anywhere in a procedure.
+
 **Optional `dbt_project.yml` defaults** for everything under `models/staging/`:
 
 ```yaml
@@ -321,6 +338,29 @@ from {{ ref("int_u8__e1_mi_with_ds01") }}
 ```
 
 Adjust `unique_key` and incremental filter to match your keys and grain.
+
+### Other intermediate and mart models you can build from the same U8 SQL
+
+The examples above only cover the **E1** path (`E1_MI` + `DS01_E1_II`). Once you add more **staging** models (see Phase 4), you can add **parallel** intermediate and mart layers using the same patterns: `ref('stg_u8__…')` joined to `source('u8_integrations', '…')` or to another staging model, then **`ref('int_…')`** into marts.
+
+| Suggested dbt model | Role | U8 procedures that motivate the join / grain (examples) |
+|---------------------|------|-----------------------------------------------------------|
+| `int_u8__e2_mi_with_ds01.sql` | `stg_u8__e2_mi` ⟵⟶ `DS01_E2_II` on the same key pattern as E1 | `P748_E2_DS01_MERGE_MI.sql`, `P9999A_E2_DS01_MERGE_MI.sql` |
+| `int_u8__e2_mi_with_ds21.sql` | `E2_MI` ⟵⟶ `DS21_E2_II` (and often `DS01_E2_II`) | `P1023_E2_DS21_MERGE_MI.sql`, `P9999_E2_DS21_MERGE_MI.sql` |
+| `int_u8__e1_ds01_with_ds21.sql` | `DS01_E1_II` ⟵⟶ `DS21_E1_II` via `E1_MI` / `MI_ID` (survivor-style logic is procedural; dbt only **reads** post-merge state) | `P1105_E1_DS01_DS21_MERGE.sql` |
+| `mart_u8__e2_account_enriched.sql` | Filter/project on `int_u8__e2_mi_with_ds01` (or your chosen int model) | Same sources as the chosen intermediate |
+| `fct_u8__e2_daily_snapshot.sql` | Incremental fact over an E2 intermediate | Same **pattern** as `fct_u8__daily_snapshot.sql`; swap `ref()` target |
+
+**Marts** are **domain-specific**: name them for the **BI subject** (accounts, opportunities, duplicates), not for every procedure. You do **not** need one mart per procedure—only **stable** outputs your dashboards consume.
+
+**Optional `dbt_project.yml` defaults** for marts (often **table**):
+
+```yaml
+models:
+  my_dbt:
+    marts:
+      +materialized: table
+```
 
 ---
 
