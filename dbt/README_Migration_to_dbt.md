@@ -239,7 +239,7 @@ Replace `my_dbt` with your project name from `name:` at the top of `dbt_project.
 3. **Use `ref()`** only between **dbt models**; use **`source()`** for raw/integration inputs.
 4. **Materialization** — Often **`table`** or **`incremental`** for large marts (choose strategy with your warehouse’s strengths).
 
-### Notes: which U8 source SQL informed Phase 5 examples
+### Which U8 source SQL informed Phase 5 examples?
 
 The Phase 5 `.sql` blocks are **illustrative dbt models** (they are **not** pasted from a single Snowflake procedure). They were shaped using **table and column names** that appear in integration procedures under:
 
