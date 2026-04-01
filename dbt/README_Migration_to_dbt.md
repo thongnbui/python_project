@@ -6,6 +6,39 @@ This document describes a practical path to **adopt dbt** when you already have 
 
 ---
 
+## When dbt helps in this use case (and when it doesn’t)
+
+Integration-heavy stacks (Snowflake **stored procedures**, merges, `CALL` chains, ops tables like `INT_OPS` / `MSG_OPS`) often raise the question: **what does dbt actually buy us?** Short answer: dbt is usually **not** there to replace that operational layer; it pays off **downstream**, for **analytics** and **governance**—if you need them.
+
+### What dbt does **not** replace
+
+- **Procedural integration** — loops, nested `CALL`s, transactions, duplicate-survivor logic, dynamic `CLONE`, email queues. That stays in Snowflake (or your orchestrator). dbt does **not** make those jobs simpler.
+- If the only work is **operational** SQL and **no** curated layer for BI, **dbt’s main payoff is small**.
+
+### Where dbt **does** add benefit (if you have this need)
+
+| Benefit | What it means in practice |
+|--------|---------------------------|
+| **Governed analytics layer** | Stable `mart_*` (or similar) tables/views for BI, with **changes tracked in git**, not only “who edited a view in the UI.” |
+| **Tests** | Automated checks on keys, relationships, orphans—catch breaks **after** procedures run, **before** bad numbers hit dashboards. |
+| **Docs + lineage** | Onboarding and audits: what `E1_MI` / marts **mean** and how they **connect**, without reading every procedure. |
+| **CI** | Pull requests run `dbt parse` / `dbt build` / tests so bad SQL doesn’t reach prod. |
+| **Clear separation** | Procedures = **write path** (integration); dbt = **read models** for analytics. Easier ownership than mixing everything in procedures. |
+
+### When **skipping** or **deferring** dbt is reasonable
+
+- Reporting is light, few people write SQL, and **views + procedure outputs** are enough.
+- You don’t need git review, automated tests, or a data catalog.
+- The team doesn’t have capacity to **own** a dbt project and CI.
+
+Deferring dbt is a valid choice; adopt it when **analytics consumption** and **change frequency** justify the overhead.
+
+### One-line summary
+
+**dbt is worth it when you want repeatable, tested, documented SQL for an analytics layer on top of what procedures already write**—not as a drop-in replacement for integration procedures. If that pain isn’t there yet, the benefit is easy to miss.
+
+---
+
 ## Where the migration happens (two directories)
 
 A migration has a **source** (existing Snowflake integration scripts) and a **target** (the dbt project where new models live). They are **not** the same folder.
