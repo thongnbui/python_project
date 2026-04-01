@@ -51,7 +51,7 @@ This is the directory that holds **today’s** Snowflake stored procedures and r
 
 | Role | Path |
 |------|------|
-| **Integration / procedures (read here)** | `/Users/thongbui/open_issue/U8_WHSE/P1062_U8_SN0_to_UpdateGitSnowflake/STAGING/U8_INTEGRATIONS` |
+| **Integration / procedures (read here)** | `U8_WHSE/P1062_U8_SN0_to_UpdateGitSnowflake/STAGING/U8_INTEGRATIONS` |
 
 Typical layout: `procedures/*.sql` — `MERGE`/`UPDATE` flows, snapshot `CLONE` jobs, ownership helpers, ops logging (`INT_OPS`, `MSG_OPS`). **You do not run `dbt` from this directory.** Use it for **Phase 0** inventory, naming conventions (`DS*_II`, `*_MI`), and deciding what stays as procedures vs what becomes dbt models.
 
