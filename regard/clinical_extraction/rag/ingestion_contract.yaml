@@ -1,0 +1,17 @@
+# Ingestion + index lifecycle (prototype contract for §5.3).
+
+idempotency:
+  # Upsert / skip duplicate work when the same logical document is re-exported.
+  primary_key: [source_version, doc_id]
+
+incremental_updates:
+  tombstone_field: deleted_at # ISO-8601 when source document removed
+  version_field: source_etag # opaque version from source system
+
+vector_and_lexical:
+  # Operational: document backup/restore for your chosen stores (placeholders).
+  backup:
+    vector: "Snapshot index metadata + object store per tenant partition (see runbooks)."
+    lexical: "Snapshot inverted index + synonym lists if used."
+  restore:
+    smoke_test: "Run retrieval_metrics + rag_ablation on gold after restore."

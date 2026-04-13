@@ -13,6 +13,14 @@
 2. Fail closed on retrieve path: return `insufficient_context` with user-safe message.
 3. Trigger index rebuild from last known good snapshot if corruption suspected.
 
+## RAG index backup / restore (stub)
+
+Contract fields live in [`rag/ingestion_contract.yaml`](../rag/ingestion_contract.yaml). For each vector and lexical store you adopt:
+
+1. **Backup:** scheduled snapshot of index metadata + backing object store / shard files per tenant partition (see `vector_and_lexical.backup` in the YAML).
+2. **Restore:** replay ingestion from last good `source_version` boundary, then run `evals/scripts/retrieval_metrics.py` and `evals/scripts/rag_ablation.py` on gold.
+3. **Validate manifests:** `python evals/scripts/validate_ingestion_manifest.py path/to/manifest.jsonl` before bulk ingest.
+
 ## Model latency spike or 429 storms
 
 1. Lower concurrency; enable request queue.

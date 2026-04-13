@@ -28,3 +28,10 @@ filters:
 operational_targets:
   index_freshness_minutes: 15
   p95_retrieval_latency_ms: 250
+
+# Reported periodically from production / pilot (placeholders for §5.5 operational checklist).
+operational_reporting:
+  index_size_bytes_per_tenant: null
+  p95_retrieval_latency_ms_sampled: null
+  embedding_cost_usd_per_1m_tokens: null
+  notes: "Populate from billing + APM; compare to operational_targets."

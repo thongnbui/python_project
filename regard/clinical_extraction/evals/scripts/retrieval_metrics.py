@@ -27,6 +27,28 @@ def precision_at_k(retrieved_ids: list[str], gold_ids: list[str], k: int) -> flo
     return hits / len(gold_ids)
 
 
+def iter_gold_chunk_rows(path: Path) -> Iterator[tuple[list[str], list[str]]]:
+    """Yield ``(retrieved_chunk_ids, gold_chunk_ids)`` for rows that define gold retrieval."""
+    for row in _load_jsonl(path):
+        exp = row.get("expected") or {}
+        gold_ids = exp.get("gold_chunk_ids")
+        if not gold_ids:
+            continue
+        chunks = row.get("retrieved_chunks") or []
+        retrieved_ids = [str(c.get("chunk_id", "")) for c in chunks]
+        yield retrieved_ids, list(gold_ids)
+
+
+def mean_precision_for_k(path: Path, k: int) -> tuple[int, float]:
+    """Return (n_rows, mean precision@k) over rows with ``gold_chunk_ids``."""
+    scores: list[float] = []
+    for retrieved_ids, gold_ids in iter_gold_chunk_rows(path):
+        scores.append(precision_at_k(retrieved_ids, gold_ids, k))
+    if not scores:
+        return 0, 0.0
+    return len(scores), sum(scores) / len(scores)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -39,22 +61,12 @@ def main() -> int:
     parser.add_argument("--k", type=int, default=5)
     args = parser.parse_args()
 
-    scores: list[float] = []
-    for row in _load_jsonl(args.dataset):
-        exp = row.get("expected") or {}
-        gold_ids = exp.get("gold_chunk_ids")
-        if not gold_ids:
-            continue
-        chunks = row.get("retrieved_chunks") or []
-        retrieved_ids = [str(c.get("chunk_id", "")) for c in chunks]
-        scores.append(precision_at_k(retrieved_ids, gold_ids, args.k))
-
-    if not scores:
+    n, avg = mean_precision_for_k(args.dataset, args.k)
+    if not n:
         print("No rows with gold_chunk_ids; nothing to score.", file=sys.stderr)
         return 0
 
-    avg = sum(scores) / len(scores)
-    print(json.dumps({"n": len(scores), f"precision_at_{args.k}": round(avg, 4)}, indent=2))
+    print(json.dumps({"n": n, f"precision_at_{args.k}": round(avg, 4)}, indent=2))
     return 0
 
 

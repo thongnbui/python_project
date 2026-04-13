@@ -1,0 +1,20 @@
+# Role-based visibility for retrieved chunks (design contract; enforce in retrieve path).
+#
+# - ``allowed_doc_types``: filter on ``chunk.metadata.doc_type`` (or top-level metadata alias).
+# - ``index_partition_key``: logical partition for multi-tenant / de-ID indices (not enforced here).
+
+default_role: clinician
+
+roles:
+  clinician:
+    allowed_doc_types:
+      - progress_note
+      - problem_list
+      - lab
+      - imaging_summary
+    index_partition_key: "{tenant_id}/clinical_full"
+
+  researcher_limited:
+    allowed_doc_types:
+      - lab
+    index_partition_key: "{tenant_id}/deidentified_labs_only"

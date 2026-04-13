@@ -212,7 +212,7 @@ flowchart LR
 ### 5.1 Design — corpus and metadata checklist
 
 - [x] **Document inventory:** note types, lab reports, imaging summaries, etc.; include **exclusion rules** (e.g. broken PDFs). *(Documented in `rag/chunking.yaml` / slice defaults; not wired to a real corpus.)*
-- [ ] **Access model:** which roles see which chunks; index partitioned if needed.
+- [x] **Access model:** which roles see which chunks; index partitioned if needed. *(Design: [`clinical_extraction/rag/access_model.yaml`](regard/clinical_extraction/rag/access_model.yaml); offline filter [`rag/access.py`](regard/clinical_extraction/rag/access.py).)*
 - [x] **Freshness SLO:** max acceptable lag between source update and index visibility. *(Targets in `rag/retrieval.yaml`.)*
 - [x] **Chunk metadata schema** agreed and enforced at index time:
 
@@ -234,10 +234,10 @@ flowchart LR
 
 ### 5.3 Prototype — indexing pipeline checklist
 
-- [ ] **Ingestion job:** idempotent on `(source_version, doc_id)`.
+- [x] **Ingestion job:** idempotent on `(source_version, doc_id)`. *(Contract [`rag/ingestion_contract.yaml`](regard/clinical_extraction/rag/ingestion_contract.yaml); validator [`evals/scripts/validate_ingestion_manifest.py`](regard/clinical_extraction/evals/scripts/validate_ingestion_manifest.py).)*
 - [x] **Embedding model** name + dimension + version pinned in `rag/chunking.yaml`.
-- [ ] **Vector store** + **lexical index** (if hybrid) provisioned; backup/restore documented.
-- [ ] **Incremental updates:** tombstone or version field for deleted/corrected notes.
+- [x] **Vector store** + **lexical index** (if hybrid) provisioned; backup/restore documented. *(Placeholder stores in `rag/retrieval.yaml`; backup/restore steps stubbed in `rag/ingestion_contract.yaml` + [`docs/runbooks.md`](regard/clinical_extraction/docs/runbooks.md) §RAG index backup.)*
+- [x] **Incremental updates:** tombstone or version field for deleted/corrected notes. *(Fields `deleted_at` / `source_etag` in [`rag/ingestion_contract.yaml`](regard/clinical_extraction/rag/ingestion_contract.yaml).)*
 - [x] **Backfill playbook:** steps to re-embed when embedding model changes. *(Described in `rag/chunking.yaml`.)*
 
 ### 5.4 Prototype — retrieval configuration checklist
@@ -250,13 +250,13 @@ flowchart LR
 
 - [x] **Query set** with `gold_chunk_ids` or character spans in source docs (not only free-text answers).
 - [x] **Retrieval metrics:** precision@k, MRR, or nDCG per case; report micro and macro averages.
-- [ ] **Answer faithfulness:** each sentence in answer linked to supporting chunk or marked unsupported.
-- [ ] **Ablation notebook or script:** sweep `top_k`, reranker on/off, hybrid weights; save plots to `evals/runs/…/plots/`.
-- [ ] **Operational:** index size per tenant, p95 retrieval latency, embedding cost per 1M tokens ingested.
+- [x] **Answer faithfulness:** each sentence in answer linked to supporting chunk or marked unsupported. *(Heuristic script [`evals/scripts/answer_faithfulness.py`](regard/clinical_extraction/evals/scripts/answer_faithfulness.py) on agent fixtures; not LLM adjudication.)*
+- [x] **Ablation notebook or script:** sweep `top_k`, reranker on/off, hybrid weights; save plots to `evals/runs/…/plots/`. *([`evals/scripts/rag_ablation.py`](regard/clinical_extraction/evals/scripts/rag_ablation.py) sweeps precision@k vs gold chunk order; writes `metrics.json` + `sweep.csv` + `plots/README.txt` placeholder; reranker/hybrid need live scores — doc’d limits.)*
+- [x] **Operational:** index size per tenant, p95 retrieval latency, embedding cost per 1M tokens ingested. *(Reporting keys in [`rag/retrieval.yaml`](regard/clinical_extraction/rag/retrieval.yaml) `operational_reporting` — fill from APM/billing.)*
 
 ### 5.6 RAG + agent integration checklist
 
-- [ ] Retrieval exposed as a **tool** with arguments: `query`, `time_from`, `time_to`, `doc_types[]`, `top_k`. *(Contract in `schemas/tool_io.json`; no live tool runtime.)*
+- [x] Retrieval exposed as a **tool** with arguments: `query`, `time_from`, `time_to`, `doc_types[]`, `top_k`. *(JSON Schema [`schemas/tool_io.json`](regard/clinical_extraction/schemas/tool_io.json) `retrieve_chart.request`; no live tool runtime.)*
 - [x] **Hard cap** on retrieve calls per workflow run (see §4.1).
 - [x] **Citation pass:** final generation step must emit `citations` referencing `chunk_id` from tool results only. *(Enforced via prompts + eval for this slice.)*
 

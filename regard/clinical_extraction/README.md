@@ -47,6 +47,11 @@ python evals/scripts/llm_judge_eval.py evals/runs/<run_id>/predictions.jsonl --d
 # Agent replay metrics + trajectory p50/p95 over all fixtures (see docs/runbooks.md)
 python agents/workflow_stub.py --fixtures-dir agents/fixtures
 
+# RAG: retrieval precision@k, top_k ablation, answer faithfulness on a fixture (see docs/EVAL_WORKFLOW.md §6)
+python evals/scripts/retrieval_metrics.py
+python evals/scripts/rag_ablation.py --top-k-values 1,3,5,8
+python evals/scripts/answer_faithfulness.py agents/fixtures/trace_ce-003.json
+
 # Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
 # or: make -C regard/clinical_extraction test

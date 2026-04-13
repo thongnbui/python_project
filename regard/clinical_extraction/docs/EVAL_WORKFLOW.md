@@ -203,6 +203,31 @@ python regard/clinical_extraction/evals/scripts/retrieval_metrics.py
 
 Uses gold rows that define `gold_chunk_ids` (e.g. `ce-003`, `ce-005`).
 
+### RAG ablation + faithfulness + ingestion (§5)
+
+**Top-k sweep** (writes `evals/runs/<dir>/metrics.json`, CSV, and `plots/` placeholder):
+
+```bash
+python regard/clinical_extraction/evals/scripts/rag_ablation.py \
+  --dataset regard/clinical_extraction/evals/gold/cases_v2026-04-13.jsonl \
+  --output-dir regard/clinical_extraction/evals/runs/ablation-local
+```
+
+**Answer faithfulness** (fixture `final.markdown` vs tool chunk texts):
+
+```bash
+python regard/clinical_extraction/evals/scripts/answer_faithfulness.py \
+  regard/clinical_extraction/agents/fixtures/trace_ce-003.json
+```
+
+**Ingestion manifest** (unique `source_version` + `doc_id`):
+
+```bash
+python regard/clinical_extraction/evals/scripts/validate_ingestion_manifest.py manifest.jsonl
+```
+
+Role-based chunk filtering (offline): [`rag/access.py`](../rag/access.py). Contracts: [`rag/access_model.yaml`](../rag/access_model.yaml), [`rag/ingestion_contract.yaml`](../rag/ingestion_contract.yaml).
+
 ## 7. CI (offline, no secrets)
 
 GitHub Actions runs **`pytest regard/clinical_extraction/tests`** on changes under `regard/clinical_extraction/` (includes dry-run + committed `baseline_metrics.json` regression). No `OPENAI_API_KEY` required.
