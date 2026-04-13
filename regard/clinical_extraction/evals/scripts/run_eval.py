@@ -162,24 +162,62 @@ def _call_openai(
     temperature: float,
     top_p: float,
     max_tokens: int,
-) -> tuple[str, int | None, int | None]:
+    openai_schema_path: Path,
+    use_strict_json_schema: bool,
+) -> tuple[str, int | None, int | None, str]:
+    """Call Chat Completions; prefer structured `json_schema` (no `_meta`), then full validate.
+
+    Returns:
+        content, prompt_tokens, completion_tokens, format_label (json_schema | json_object).
+    """
     client = OpenAI()
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    common = {
+        "model": model,
+        "temperature": temperature,
+        "top_p": top_p,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+
+    if use_strict_json_schema and openai_schema_path.is_file():
+        schema_obj = json.loads(openai_schema_path.read_text(encoding="utf-8"))
+        try:
+            resp = client.chat.completions.create(
+                **common,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "clinical_extraction_output",
+                        "strict": True,
+                        "schema": schema_obj,
+                    },
+                },
+            )
+            content = resp.choices[0].message.content or "{}"
+            usage = resp.usage
+            pt = getattr(usage, "prompt_tokens", None) if usage else None
+            ct = getattr(usage, "completion_tokens", None) if usage else None
+            return content, pt, ct, "json_schema"
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"Warning: structured json_schema call failed ({exc}); "
+                "falling back to json_object.",
+                file=sys.stderr,
+            )
+
     resp = client.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        top_p=top_p,
-        max_tokens=max_tokens,
+        **common,
         response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
     )
     content = resp.choices[0].message.content or "{}"
     usage = resp.usage
     pt = getattr(usage, "prompt_tokens", None) if usage else None
     ct = getattr(usage, "completion_tokens", None) if usage else None
-    return content, pt, ct
+    return content, pt, ct, "json_object"
 
 
 def _jsonschema_validate(instance: dict[str, Any]) -> None:
@@ -274,6 +312,11 @@ def main() -> int:
         metavar="N",
         help="Only first N cases after merge (cheap live smoke test)",
     )
+    parser.add_argument(
+        "--no-strict-schema",
+        action="store_true",
+        help="Live only: skip OpenAI json_schema structured output; use json_object only",
+    )
     args = parser.parse_args()
 
     feature_root = args.feature_root.resolve()
@@ -334,6 +377,10 @@ def main() -> int:
     strata_schema: dict[str, list[int]] = defaultdict(list)
     strata_recall: dict[str, list[float]] = defaultdict(list)
 
+    openai_schema_path = feature_root / "schemas" / "extraction_output_openai.json"
+    use_strict_openai_schema = not args.dry_run and not args.no_strict_schema
+    openai_formats_used: list[str] = []
+
     with predictions_path.open("w", encoding="utf-8") as pred_f:
         for case in cases:
             case_id = case["case_id"]
@@ -354,14 +401,17 @@ def main() -> int:
                     _jsonschema_validate(body)
                     pred = ExtractionOutput.model_validate(body)
                 else:
-                    raw, pt, ct = _call_openai(
+                    raw, pt, ct, fmt = _call_openai(
                         system=system,
                         user=user,
                         model=args.model,
                         temperature=args.temperature,
                         top_p=args.top_p,
                         max_tokens=args.max_tokens,
+                        openai_schema_path=openai_schema_path,
+                        use_strict_json_schema=use_strict_openai_schema,
                     )
+                    openai_formats_used.append(fmt)
                     body = json.loads(raw)
                     _merge_meta(body, prompt_version, args.model)
                     _jsonschema_validate(body)
@@ -471,6 +521,15 @@ def main() -> int:
         },
         "dry_run": args.dry_run,
         "max_cases": args.max_cases,
+        "openai_structured_output": {
+            "strict_json_schema_requested": bool(use_strict_openai_schema),
+            "schema_file": str(openai_schema_path)
+            if use_strict_openai_schema
+            else None,
+            "formats_used": sorted(set(openai_formats_used))
+            if openai_formats_used
+            else None,
+        },
     }
     (runs_root / "manifest.json").write_text(
         json.dumps(run_manifest, indent=2), encoding="utf-8"

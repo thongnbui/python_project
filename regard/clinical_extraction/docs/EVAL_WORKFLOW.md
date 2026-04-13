@@ -35,26 +35,74 @@ Inspect `regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl` for r
 python regard/clinical_extraction/evals/scripts/run_eval.py --include-stress --model gpt-4o-mini
 ```
 
-## 4. Freeze a baseline (regression gate)
+## 4. Regression baseline (committed + optional live)
 
-After a good run:
+### Dry-run baseline (CI-friendly)
 
-```bash
-cp regard/clinical_extraction/evals/runs/<good_run_id>/metrics.json \
-   regard/clinical_extraction/evals/baseline_metrics.json
-```
+`evals/baseline_metrics.json` is checked in for **offline** regression. It records expected **`schema_pass_rate`** and **`mean_entity_recall`** after `run_eval.py --dry-run --include-stress`.
 
-Later:
+Check locally:
 
 ```bash
 python regard/clinical_extraction/evals/scripts/run_eval.py --dry-run --include-stress \
-  --baseline-metrics regard/clinical_extraction/evals/baseline_metrics.json
+  --baseline-metrics regard/clinical_extraction/evals/baseline_metrics.json --force
 ```
 
-## 5. RAG retrieval metrics (offline)
+`pytest regard/clinical_extraction/tests/test_baseline_regression.py` runs the same check.
+
+**When to update the committed baseline:** you changed gold rows, stress cases, dry-run logic, or schema in a way that *intentionally* moves metrics. Regenerate:
+
+```bash
+python regard/clinical_extraction/evals/scripts/run_eval.py --dry-run --include-stress --force
+# Copy evals/runs/<new_id>/metrics.json → evals/baseline_metrics.json (merge _comment if desired)
+```
+
+### Live baseline (local only)
+
+- [x] **Saved:** `evals/baseline_metrics_live.json` frozen from live run **`98bf4fe5c9ee`** (8 cases, `gpt-4o-mini`, `--include-stress`). *File is gitignored; recreate with the command below after future “golden” runs.*
+
+After a good **live** run, keep a **private** copy for model/prompt A/B:
+
+```bash
+cp regard/clinical_extraction/evals/runs/<good_run_id>/metrics.json \
+   regard/clinical_extraction/evals/baseline_metrics_live.json
+```
+
+`baseline_metrics_live.json` is **gitignored**. An older committed reference snapshot is in
+[`evals/baseline_metrics_live.json.example`](../evals/baseline_metrics_live.json.example)
+(run `aa7759fb70e8`, 6-case era).
+
+Compare a new live run:
+
+```bash
+python regard/clinical_extraction/evals/scripts/run_eval.py --include-stress --model gpt-4o-mini \
+  --baseline-metrics regard/clinical_extraction/evals/baseline_metrics_live.json
+```
+
+## 5. Structured OpenAI output (default on live runs)
+
+Live calls use **`json_schema` + `strict: true`** via
+[`schemas/extraction_output_openai.json`](../schemas/extraction_output_openai.json)
+(no `_meta` in the API schema; the harness injects `_meta` before full validation).
+
+Disable if your model endpoint rejects structured outputs:
+
+```bash
+python regard/clinical_extraction/evals/scripts/run_eval.py ... --no-strict-schema
+```
+
+`evals/runs/<id>/manifest.json` records `openai_structured_output.formats_used` (`json_schema` vs `json_object` fallback).
+
+## 6. RAG retrieval metrics (offline)
 
 ```bash
 python regard/clinical_extraction/evals/scripts/retrieval_metrics.py
 ```
 
-Uses gold rows that define `gold_chunk_ids` (e.g. `ce-003`).
+Uses gold rows that define `gold_chunk_ids` (e.g. `ce-003`, `ce-005`).
+
+## 7. CI (offline, no secrets)
+
+GitHub Actions runs **`pytest regard/clinical_extraction/tests`** on changes under `regard/clinical_extraction/` (includes dry-run + committed `baseline_metrics.json` regression). No `OPENAI_API_KEY` required.
+
+Workflow: [`.github/workflows/regard-clinical-extraction.yml`](../../../.github/workflows/regard-clinical-extraction.yml).

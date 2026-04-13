@@ -40,6 +40,10 @@ cd ../.. && pytest regard/clinical_extraction/tests -q
 
 Step-by-step eval flow: [`docs/EVAL_WORKFLOW.md`](docs/EVAL_WORKFLOW.md).
 
+**Regression:** committed [`evals/baseline_metrics.json`](evals/baseline_metrics.json) gates dry-run quality (8 cases); `pytest regard/clinical_extraction/tests/`. CI runs the same suite on push/PR (see repo [`.github/workflows/regard-clinical-extraction.yml`](../../.github/workflows/regard-clinical-extraction.yml)).
+
+**Live baseline:** gitignored `evals/baseline_metrics_live.json` is set from run **`98bf4fe5c9ee`** (see [`docs/EVAL_WORKFLOW.md`](docs/EVAL_WORKFLOW.md) §4). Older example: [`evals/baseline_metrics_live.json.example`](evals/baseline_metrics_live.json.example). Live evals default to OpenAI **`json_schema`** strict output; use `--no-strict-schema` to force `json_object` only.
+
 ## Layout
 
 See the parent playbook [`../README.md`](../README.md) §2. This folder follows that layout.

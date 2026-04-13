@@ -6,3 +6,6 @@ venv312/
 
 # Secrets for local live eval
 clinical_extraction/.env
+
+# Optional local live baseline (copy from a run or from .example)
+clinical_extraction/evals/baseline_metrics_live.json

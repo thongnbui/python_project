@@ -1,0 +1,54 @@
+{
+  "_comment": "Dry-run baseline for CI: 5 gold + 3 stress. Gates: schema_pass_rate, mean_entity_recall.",
+  "run_id": "dry-run-baseline-v2",
+  "n_cases": 8,
+  "schema_pass_rate": 1.0,
+  "mean_entity_recall": 1.0,
+  "stress_pass_rate": 1.0,
+  "latency_ms": {
+    "p50": 0.339,
+    "p95": 0.449
+  },
+  "tokens": {
+    "prompt_total": 0,
+    "completion_total": 0
+  },
+  "strata": {
+    "allergy": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "diabetes": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "empty": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": null
+    },
+    "hypertension": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "injection": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": null
+    },
+    "labs": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "meds": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "negative_findings": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    },
+    "rag": {
+      "schema_pass_rate": 1,
+      "mean_entity_recall": 1.0
+    }
+  }
+}
