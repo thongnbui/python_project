@@ -44,6 +44,9 @@ python evals/scripts/export_predictions_csv.py evals/runs/<run_id>/predictions.j
 # LLM-as-judge (dry proxy, no key) or live judge — see docs/EVAL_WORKFLOW.md
 python evals/scripts/llm_judge_eval.py evals/runs/<run_id>/predictions.jsonl --dry-run
 
+# Agent replay metrics + trajectory p50/p95 over all fixtures (see docs/runbooks.md)
+python agents/workflow_stub.py --fixtures-dir agents/fixtures
+
 # Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
 # or: make -C regard/clinical_extraction test

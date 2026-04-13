@@ -126,6 +126,17 @@ python regard/clinical_extraction/evals/scripts/compare_metrics.py \
 
 Use `--strict-exit` on `summarize_run.py` if you want a non-zero exit when any case failed parsing or stress checks.
 
+### Agent workflow replay (metrics, logs, debug bundle)
+
+[`agents/workflow_stub.py`](../agents/workflow_stub.py) returns **`metrics`** (trajectory length, duplicate-call stats, optional **`expected_final`** match, tool-error / recovery fields). Batch all JSON fixtures for **p50 / p95** trajectory length:
+
+```bash
+cd regard/clinical_extraction
+python agents/workflow_stub.py --fixtures-dir agents/fixtures
+```
+
+Structured NDJSON logs: `REGARD_AGENT_STRUCTURED_LOG=1` and optional `REGARD_AGENT_LOG_PATH`. Debug bundle export: [`agents/export_debug_bundle.py`](../agents/export_debug_bundle.py). Details: [`docs/runbooks.md`](runbooks.md) (Agent metrics / observability).
+
 ## 4. Regression baseline (committed + optional live)
 
 ### Dry-run baseline (CI-friendly)

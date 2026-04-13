@@ -22,5 +22,9 @@
   "final": {
     "markdown": "## Assessment\n- CKD stage 3\n- Hyperlipidemia",
     "citations": [{ "chunk_id": "ch-enc-9-problems" }]
+  },
+  "expected_final": {
+    "markdown": "## Assessment\n- CKD stage 3\n- Hyperlipidemia",
+    "citations": [{ "chunk_id": "ch-enc-9-problems" }]
   }
 }

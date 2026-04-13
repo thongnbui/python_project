@@ -193,17 +193,17 @@ flowchart LR
 
 ### 4.3 Evaluate — agent-specific metrics
 
-- [ ] **Task success rate:** rubric-based or exact match on final structured output vs gold.
-- [ ] **Trajectory length:** distribution of steps and tool calls; flag p95 regression.
-- [ ] **Tool error recovery:** % runs that hit tool failure and still succeed safely (or fail closed correctly).
-- [ ] **Duplicate / useless calls:** count repeated identical tool calls; gate if above threshold.
-- [ ] **Human effort:** if available, track edit distance or time-to-accept for clinician-facing drafts.
+- [x] **Task success rate:** rubric-based or exact match on final structured output vs gold. *(Optional `expected_final` in replay fixtures; exact JSON match in `workflow_stub.run_fixture` → `metrics.task_match` / `task_success`.)*
+- [x] **Trajectory length:** distribution of steps and tool calls; flag p95 regression. *(`workflow_stub.py --fixtures-dir` → aggregate `p50`/`p95` of `trajectory_steps`; per-run `metrics.trajectory_*`.)*
+- [x] **Tool error recovery:** % runs that hit tool failure and still succeed safely (or fail closed correctly). *(Per-call optional `outcome`: `error`|`ok`; `metrics.tool_error_calls`, `metrics.recovery_success` when `metrics_expectation.recovery_expected`.)*
+- [x] **Duplicate / useless calls:** count repeated identical tool calls; gate if above threshold. *(`metrics.duplicate_extra_calls`, `max_consecutive_duplicate_run`; CLI `--max-duplicate-extra`.)*
+- [x] **Human effort:** if available, track edit distance or time-to-accept for clinician-facing drafts. *(Optional `metrics_meta.human_edit_distance` / `time_to_accept_ms` pass-through in `metrics.human_effort`.)*
 
 ### 4.4 Observability checklist (agents)
 
-- [ ] **Trace ID** propagated from API gateway through every tool call.
-- [ ] **Structured log** per step: `step_name`, `duration_ms`, `tool_name`, `outcome`, `retry_count` (no PHI).
-- [ ] **Debug bundle** export for a single `trace_id` (internal only): prompts, tool I/O, final output—access-controlled.
+- [x] **Trace ID** propagated from API gateway through every tool call. *(`trace_id` on fixture; every structured log line and OTel attribute uses `trace_id_hash` for shared sinks; correlation field ties steps to the same run.)*
+- [x] **Structured log** per step: `step_name`, `duration_ms`, `tool_name`, `outcome`, `retry_count` (no PHI). *(`REGARD_AGENT_STRUCTURED_LOG=1`, optional `REGARD_AGENT_LOG_PATH`; NDJSON via `agents/structured_logging.py`.)*
+- [x] **Debug bundle** export for a single `trace_id` (internal only): prompts, tool I/O, final output—access-controlled. *(`agents/export_debug_bundle.py`; `--redact` hashes long `text`/`query`/`markdown` fields.)*
 
 ---
 

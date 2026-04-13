@@ -28,3 +28,10 @@
 
 - **Stub:** `agents/workflow_stub.py` emits `{otel_span_prefix}.workflow.run` and `{otel_span_prefix}.step.<tool_name>` (prefix from `agents/workflow.yaml`). Attributes use **`trace.id_hash`** (SHA-256 of the fixture `trace_id` string) and tool metadata only—no chart text or queries.
 - **Production:** attach an OTLP or console exporter to the process `TracerProvider`; keep `phi_in_spans: false` in config and review span attributes in staging.
+
+## Agent metrics (replay) and observability
+
+- **Metrics (§4.3):** `run_fixture` returns `metrics` (trajectory length, duplicate-call stats, optional `expected_final` match, tool-error counts, recovery flags). **Batch / p95:**  
+  `python agents/workflow_stub.py --feature-root . --fixtures-dir agents/fixtures` (from `clinical_extraction/`).
+- **Structured logs (§4.4):** `REGARD_AGENT_STRUCTURED_LOG=1` and optional `REGARD_AGENT_LOG_PATH=/path/to.ndjson` — one JSON object per tool step (`trace_id_hash`, `duration_ms`, `outcome`, `retry_count`). No chart text.
+- **Debug bundle:** `python agents/export_debug_bundle.py agents/fixtures/trace_ce-003.json -o /tmp/bundle.json` (internal-only handoff; use `--redact` for safer sharing).
