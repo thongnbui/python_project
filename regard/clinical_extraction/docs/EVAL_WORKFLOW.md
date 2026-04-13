@@ -35,6 +35,50 @@ Inspect `regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl` for r
 python regard/clinical_extraction/evals/scripts/run_eval.py --include-stress --model gpt-4o-mini
 ```
 
+### Subset of cases
+
+Run only given `case_id`s (order preserved). Stress rows must be **included in the pool** (`--include-stress`) **and** listed if you want them:
+
+```bash
+python regard/clinical_extraction/evals/scripts/run_eval.py --dry-run --include-stress \
+  --case-ids ce-003,stress-001 --model gpt-4o-mini
+```
+
+### Export predictions for review
+
+```bash
+python regard/clinical_extraction/evals/scripts/export_predictions_csv.py \
+  regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl -o /tmp/review.csv
+```
+
+With **gold labels** side-by-side (main + stress JSONL):
+
+```bash
+python regard/clinical_extraction/evals/scripts/export_predictions_csv.py \
+  regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl \
+  --gold-jsonl regard/clinical_extraction/evals/gold/cases_v2026-04-13.jsonl \
+  --gold-jsonl regard/clinical_extraction/evals/gold/stress.jsonl \
+  -o /tmp/review_with_gold.csv
+```
+
+Adds columns: `gold_chart_excerpt` (truncated), `gold_expected_json`, `gold_rubric_tags`, `gold_notes_for_judge`. Omit chart column with `--chart-excerpt-chars 0`.
+
+### Summarize & compare runs
+
+```bash
+python regard/clinical_extraction/evals/scripts/summarize_run.py \
+  regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl \
+  --metrics-json regard/clinical_extraction/evals/runs/<run_id>/metrics.json
+```
+
+```bash
+python regard/clinical_extraction/evals/scripts/compare_metrics.py \
+  regard/clinical_extraction/evals/baseline_metrics.json \
+  regard/clinical_extraction/evals/runs/<run_id>/metrics.json
+```
+
+Use `--strict-exit` on `summarize_run.py` if you want a non-zero exit when any case failed parsing or stress checks.
+
 ## 4. Regression baseline (committed + optional live)
 
 ### Dry-run baseline (CI-friendly)

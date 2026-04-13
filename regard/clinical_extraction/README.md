@@ -34,11 +34,21 @@ python evals/scripts/run_eval.py --max-cases 1 --model gpt-4o-mini
 # Full live eval + stress
 python evals/scripts/run_eval.py --include-stress --model gpt-4o-mini
 
-# Tests (from repo root with venv active)
+# Only specific cases (order preserved; include stress rows only if listed + loaded)
+python evals/scripts/run_eval.py --dry-run --include-stress --case-ids ce-001,stress-002
+
+# Export a run’s predictions to CSV for review (optional: merge gold JSONL for triage)
+python evals/scripts/export_predictions_csv.py evals/runs/<run_id>/predictions.jsonl \
+  --gold-jsonl evals/gold/cases_v2026-04-13.jsonl --gold-jsonl evals/gold/stress.jsonl
+
+# Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
+# or: make -C regard/clinical_extraction test
 ```
 
 Step-by-step eval flow: [`docs/EVAL_WORKFLOW.md`](docs/EVAL_WORKFLOW.md).
+
+When this slice gains new capabilities that satisfy items in the parent playbook, **update the checkboxes** in [`../README.md`](../README.md) in the same PR (or immediately after).
 
 **Regression:** committed [`evals/baseline_metrics.json`](evals/baseline_metrics.json) gates dry-run quality (8 cases); `pytest regard/clinical_extraction/tests/`. CI runs the same suite on push/PR (see repo [`.github/workflows/regard-clinical-extraction.yml`](../../.github/workflows/regard-clinical-extraction.yml)).
 
@@ -52,6 +62,12 @@ See the parent playbook [`../README.md`](../README.md) §2. This folder follows 
 
 | Script | Purpose |
 |--------|---------|
-| `evals/scripts/run_eval.py` | Batch eval → `evals/runs/<run_id>/` |
+| `evals/scripts/run_eval.py` | Batch eval → `evals/runs/<run_id>/` (`--case-ids`, `--strict-recall`) |
+| `evals/scripts/export_predictions_csv.py` | `predictions.jsonl` → CSV; `--gold-jsonl` (repeat) merges labels |
+| `evals/scripts/summarize_run.py` | Human-readable stats from `predictions.jsonl` (+ optional `metrics.json`) |
+| `evals/scripts/compare_metrics.py` | Diff two `metrics.json` (baseline vs new run) |
+| `Makefile` | `test`, `eval-dry`, `*-help` targets |
 | `evals/scripts/retrieval_metrics.py` | Precision@k vs `gold_chunk_ids` on gold rows |
 | `agents/workflow_stub.py` | Mocked vertical slice + fixture replay |
+
+**Entity recall** defaults to **normalized** text (case, whitespace, trailing punctuation). Use **`--strict-recall`** for exact string match vs gold.

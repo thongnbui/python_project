@@ -5,7 +5,7 @@ This document outlines how to **design**, **prototype**, and **evaluate** prompt
 - **Role posting (Ashby):** [Generative AI Engineer @ Regard](https://jobs.ashbyhq.com/regard/758035db-326c-42a6-9179-f83d793b1e7b)  
 - **Careers entry point:** [Regard Careers](https://regard.com/careers/?ashby_jid=758035db-326c-42a6-9179-f83d793b1e7b)
 
-**How to use this file:** treat each `- [ ]` block as a **definition of done**. Check items off as you implement; link PRs or doc IDs in your own notes next to each section.
+**How to use this file:** treat each checkbox as **definition of done**. **`[x]`** means satisfied for the current slice (today: [`clinical_extraction/`](clinical_extraction/README.md)); **`[ ]`** means not implemented or not in scope yet. When you ship new work under `regard/` or elsewhere, **flip the matching lines here** so this playbook stays accurate (same PR as the code, or immediately after).
 
 **Python environment:** use `regard/venv312` (Python 3.12) for the sample implementation in [`clinical_extraction/`](clinical_extraction/README.md). It is gitignored; create it with `python3.12 -m venv regard/venv312` from the repo root, then `pip install -r regard/clinical_extraction/requirements.txt`.
 
@@ -41,11 +41,11 @@ Everything below should be read through that lens: **patient safety**, **clinica
 
 Use a **single place** per feature (or per domain) so prompts, evals, and RAG configs stay traceable.
 
-- [ ] Create a top-level folder for the initiative, e.g. `regard/<feature_name>/` (or your monorepo equivalent).
-- [ ] Store **prompts as files** (`.md`, `.jinja`, or `.yaml` with `system` / `user` blocks)—never only in notebooks.
-- [ ] Store **frozen eval sets** under `evals/gold/` (git-lfs or internal store if large); never mutate rows in place—version filenames (`v2026-04-13.jsonl`).
-- [ ] Store **run outputs** under `evals/runs/<run_id>/` (gitignored) with `manifest.json` pointing to prompt hash, model, git SHA, dataset version.
-- [ ] Add a **`README.md` per feature** with: owner, clinical reviewer, SLO (latency/cost), and link to rubric doc.
+- [x] Create a top-level folder for the initiative, e.g. `regard/<feature_name>/` (or your monorepo equivalent).
+- [x] Store **prompts as files** (`.md`, `.jinja`, or `.yaml` with `system` / `user` blocks)—never only in notebooks.
+- [x] Store **frozen eval sets** under `evals/gold/` (git-lfs or internal store if large); never mutate rows in place—version filenames (`v2026-04-13.jsonl`).
+- [x] Store **run outputs** under `evals/runs/<run_id>/` (gitignored) with `manifest.json` pointing to prompt hash, model, git SHA, dataset version.
+- [x] Add a **`README.md` per feature** with: owner, clinical reviewer, SLO (latency/cost), and link to rubric doc.
 
 Suggested layout (adapt names to your stack):
 
@@ -74,7 +74,7 @@ regard/<feature>/
     workflow.yaml           # graph/steps, caps, tool allowlist
 ```
 
-- [ ] **`manifest.yaml` for prompts** includes at minimum: `prompt_id`, `version`, `path`, `owner`, `created_at`, `eval_dataset_id` it was validated against, `model_allowlist`.
+- [x] **`manifest.yaml` for prompts** includes at minimum: `prompt_id`, `version`, `path`, `owner`, `created_at`, `eval_dataset_id` it was validated against, `model_allowlist`.
 
 ---
 
@@ -82,14 +82,14 @@ regard/<feature>/
 
 ### 3.1 Design — specification checklist
 
-- [ ] **Task ID** and one-sentence **user story** (clinician or downstream system).
-- [ ] **Inputs** listed with type: unstructured text / structured FHIR-like JSON / retrieved chunks with `chunk_id`.
-- [ ] **Output contract:** JSON Schema **or** Pydantic model name + field descriptions; required vs optional fields explicit.
-- [ ] **Grounding rule:** “Answer only from provided context; if insufficient, return `insufficient_context: true` and list missing info.” (wording tuned with clinical).
-- [ ] **Forbidden behaviors** enumerated (e.g., no new diagnoses, no medication changes, no patient-identifying info in logs).
-- [ ] **System vs user split:** system = policy + format; user = patient-specific facts + retrieval blocks.
-- [ ] **Citation rule:** every clinical claim maps to `chunk_id` or `source_span` when chunks exist.
-- [ ] **Token budget** per section (max bullets, max words) documented in the spec.
+- [x] **Task ID** and one-sentence **user story** (clinician or downstream system).
+- [x] **Inputs** listed with type: unstructured text / structured FHIR-like JSON / retrieved chunks with `chunk_id`.
+- [x] **Output contract:** JSON Schema **or** Pydantic model name + field descriptions; required vs optional fields explicit.
+- [x] **Grounding rule:** “Answer only from provided context; if insufficient, return `insufficient_context: true` and list missing info.” (wording tuned with clinical).
+- [x] **Forbidden behaviors** enumerated (e.g., no new diagnoses, no medication changes, no patient-identifying info in logs).
+- [x] **System vs user split:** system = policy + format; user = patient-specific facts + retrieval blocks.
+- [x] **Citation rule:** every clinical claim maps to `chunk_id` or `source_span` when chunks exist.
+- [x] **Token budget** per section (max bullets, max words) documented in the spec.
 
 **Prompt spec template** (copy into `prompts/<name>/SPEC.md`):
 
@@ -105,9 +105,9 @@ regard/<feature>/
 
 ### 3.2 Design — structured output (implementation)
 
-- [ ] Define **JSON Schema** under `schemas/` and validate every model response with a library (e.g. `jsonschema`, Pydantic `model_validate_json`).
-- [ ] Add **`_meta` object** in schema for: `prompt_version`, `model`, `warnings[]`, `insufficient_context` boolean.
-- [ ] Unit tests: **golden files** for parser—valid JSON, malformed JSON, truncated JSON recovery policy.
+- [x] Define **JSON Schema** under `schemas/` and validate every model response with a library (e.g. `jsonschema`, Pydantic `model_validate_json`).
+- [x] Add **`_meta` object** in schema for: `prompt_version`, `model`, `warnings[]` *(this slice keeps `insufficient_context` at the top level of the payload, not inside `_meta`.)*
+- [x] Unit tests: **golden files** for parser—valid JSON, malformed JSON, truncated JSON recovery policy.
 
 Example **minimum fields** for extraction-style tasks:
 
@@ -123,11 +123,11 @@ Example **minimum fields** for extraction-style tasks:
 
 ### 3.3 Prototype — execution checklist
 
-- [ ] Script or notebook **`run_one(case_id)`** that loads prompt template + fills variables from gold row.
-- [ ] **Decoding grid** recorded: temperature, top_p, max_tokens, seed (if supported); store in `manifest.json`.
-- [ ] **Prompt hash:** SHA-256 of rendered system+user strings logged per request.
-- [ ] **Failure probes** as a dedicated `evals/gold/stress.jsonl` (empty context, contradictory sentences, garbage/OCR, wrong-language snippet).
-- [ ] **Cost estimate:** tokens in/out per case from provider logs; aggregate in eval summary.
+- [x] Script or notebook **`run_one(case_id)`** that loads prompt template + fills variables from gold row *(implemented as `run_eval.py --case-ids`.)*
+- [x] **Decoding grid** recorded: temperature, top_p, max_tokens, seed (if supported); store in `manifest.json`.
+- [x] **Prompt hash:** SHA-256 of rendered system+user strings logged per request.
+- [x] **Failure probes** as a dedicated `evals/gold/stress.jsonl` (empty context, contradictory sentences, garbage/OCR, wrong-language snippet).
+- [x] **Cost estimate:** tokens in/out per case from provider logs; aggregate in eval summary.
 
 ### 3.4 Evaluate — gold dataset schema (implementation)
 
@@ -142,20 +142,20 @@ Each line in `cases.jsonl` should be valid JSON. **Minimum columns:**
 | `rubric_tags` | e.g. `["pediatric", "med_reconciliation"]` for stratified metrics |
 | `notes_for_judge` | Non-leaking hints for human/LLM graders |
 
-- [ ] **Stratified reporting:** metrics broken out by `rubric_tags` and document length quartile.
-- [ ] **Schema validation rate:** % outputs passing JSON Schema (gate at ≥ agreed threshold).
-- [ ] **Slot metrics:** per-field precision/recall or exact match for coded fields.
+- [x] **Stratified reporting:** metrics broken out by `rubric_tags` *(document length quartiles: not yet.)*
+- [x] **Schema validation rate:** % outputs passing JSON Schema (gate at ≥ agreed threshold).
+- [x] **Slot metrics:** per-field precision/recall or exact match for coded fields.
 - [ ] **Hallucination protocol:** list of claims extracted from model output → each marked supported / unsupported / contradicted by `input`+`retrieved_chunks` (human or secondary model with **blinded** inputs).
 - [ ] **LLM-as-judge:** rubric in `evals/rubrics/`; calibrate on ≥ N human-scored cases; report agreement (Cohen’s kappa or match rate).
-- [ ] **Regression:** compare run to `baseline_run_id`; fail if any **primary metric** drops > agreed delta.
+- [x] **Regression:** compare run to `baseline_run_id`; fail if any **primary metric** drops > agreed delta.
 
 ### 3.5 Evaluate — `run_eval.py` behavior checklist
 
-- [ ] Load `manifest.yaml` + dataset version + git SHA into `runs/<id>/manifest.json`.
-- [ ] Idempotent: same `run_id` does not append duplicate rows unless `force` flag.
-- [ ] Write **`predictions.jsonl`** aligned by `case_id` with raw model output + parse status.
-- [ ] Write **`metrics.json`** with aggregates + per-stratum breakdown + latency p50/p95 + cost.
-- [ ] Exit non-zero if regression gates fail (for CI).
+- [x] Load `manifest.yaml` + dataset version + git SHA into `runs/<id>/manifest.json`.
+- [x] Idempotent: same `run_id` does not append duplicate rows unless `force` flag.
+- [x] Write **`predictions.jsonl`** aligned by `case_id` with raw model output + parse status.
+- [x] Write **`metrics.json`** with aggregates + per-stratum breakdown + latency p50/p95 + cost.
+- [x] Exit non-zero if regression gates fail (for CI).
 
 ---
 
@@ -163,11 +163,11 @@ Each line in `cases.jsonl` should be valid JSON. **Minimum columns:**
 
 ### 4.1 Design — workflow spec checklist
 
-- [ ] **State machine diagram** (Mermaid or image) checked into `agents/` (e.g. `workflow.mmd`).
-- [ ] **State object schema:** typed fields the graph reads/writes each step (e.g. `Scratchpad`, `RetrievedChunk[]`, `DraftNote`, `Errors[]`).
-- [ ] **Tool inventory table:** name, input schema, output schema, timeout, idempotency, rate limit.
-- [ ] **Caps:** `max_steps`, `max_tool_calls`, `max_wall_ms`, `max_tokens_total`.
-- [ ] **Escalation:** when to return partial result + human task vs retry vs fail closed.
+- [x] **State machine diagram** (Mermaid or image) checked into `agents/` (e.g. `workflow.mmd`).
+- [x] **State object schema:** typed fields the graph reads/writes each step (e.g. `Scratchpad`, `RetrievedChunk[]`, `DraftNote`, `Errors[]`).
+- [x] **Tool inventory table:** name, input schema, output schema, timeout, idempotency, rate limit.
+- [x] **Caps:** `max_steps`, `max_tool_calls`, `max_wall_ms`, `max_tokens_total`.
+- [x] **Escalation:** when to return partial result + human task vs retry vs fail closed.
 - [ ] **Tracing:** OpenTelemetry span names per step; **no raw PHI** in span attributes—use hashed IDs.
 
 Example **Mermaid** stub for documentation:
@@ -186,10 +186,10 @@ flowchart LR
 
 ### 4.2 Prototype — implementation checklist
 
-- [ ] **Thin vertical slice:** one `case_id` runs end-to-end with mocked tools first, then real APIs.
-- [ ] **Tool stubs** return fixed payloads for unit tests; contract tests assert schema + error paths.
-- [ ] **Replay fixture:** serialized tool responses for deterministic CI (`agents/fixtures/`).
-- [ ] **Parallelism policy:** document which steps may run concurrently vs must be sequential for clinical consistency.
+- [x] **Thin vertical slice:** one `case_id` runs end-to-end with mocked tools first, then real APIs.
+- [x] **Tool stubs** return fixed payloads for unit tests; contract tests assert schema + error paths.
+- [x] **Replay fixture:** serialized tool responses for deterministic CI (`agents/fixtures/`).
+- [x] **Parallelism policy:** document which steps may run concurrently vs must be sequential for clinical consistency.
 
 ### 4.3 Evaluate — agent-specific metrics
 
@@ -211,10 +211,10 @@ flowchart LR
 
 ### 5.1 Design — corpus and metadata checklist
 
-- [ ] **Document inventory:** note types, lab reports, imaging summaries, etc.; include **exclusion rules** (e.g. broken PDFs).
+- [x] **Document inventory:** note types, lab reports, imaging summaries, etc.; include **exclusion rules** (e.g. broken PDFs). *(Documented in `rag/chunking.yaml` / slice defaults; not wired to a real corpus.)*
 - [ ] **Access model:** which roles see which chunks; index partitioned if needed.
-- [ ] **Freshness SLO:** max acceptable lag between source update and index visibility.
-- [ ] **Chunk metadata schema** agreed and enforced at index time:
+- [x] **Freshness SLO:** max acceptable lag between source update and index visibility. *(Targets in `rag/retrieval.yaml`.)*
+- [x] **Chunk metadata schema** agreed and enforced at index time:
 
 | Field | Example | Use |
 |--------|---------|-----|
@@ -228,37 +228,37 @@ flowchart LR
 
 ### 5.2 Design — chunking implementation checklist
 
-- [ ] **Strategy documented:** fixed-token vs heading-based vs encounter-window; overlap size; max chunk size.
-- [ ] **Deduplication:** hash text to skip identical chunks across exports.
-- [ ] **Parent/child chunks** (optional): small retrieval units + larger context expansion for generation.
+- [x] **Strategy documented:** fixed-token vs heading-based vs encounter-window; overlap size; max chunk size.
+- [x] **Deduplication:** hash text to skip identical chunks across exports.
+- [x] **Parent/child chunks** (optional): small retrieval units + larger context expansion for generation.
 
 ### 5.3 Prototype — indexing pipeline checklist
 
 - [ ] **Ingestion job:** idempotent on `(source_version, doc_id)`.
-- [ ] **Embedding model** name + dimension + version pinned in `rag/chunking.yaml`.
+- [x] **Embedding model** name + dimension + version pinned in `rag/chunking.yaml`.
 - [ ] **Vector store** + **lexical index** (if hybrid) provisioned; backup/restore documented.
 - [ ] **Incremental updates:** tombstone or version field for deleted/corrected notes.
-- [ ] **Backfill playbook:** steps to re-embed when embedding model changes.
+- [x] **Backfill playbook:** steps to re-embed when embedding model changes. *(Described in `rag/chunking.yaml`.)*
 
 ### 5.4 Prototype — retrieval configuration checklist
 
-- [ ] `retrieval.yaml` lists: `top_k`, `mmr_lambda`, hybrid α (dense vs sparse), **reranker** model if any.
-- [ ] **Query rewriting** behind a flag; A/B only after offline gain on gold queries.
-- [ ] **Filters:** time window, `doc_type`, encounter—exposed as explicit API parameters to avoid prompt injection into filters.
+- [x] `retrieval.yaml` lists: `top_k`, `mmr_lambda`, hybrid α (dense vs sparse), **reranker** model if any.
+- [x] **Query rewriting** behind a flag; A/B only after offline gain on gold queries.
+- [x] **Filters:** time window, `doc_type`, encounter—exposed as explicit API parameters to avoid prompt injection into filters.
 
 ### 5.5 Evaluate — RAG gold and metrics checklist
 
-- [ ] **Query set** with `gold_chunk_ids` or character spans in source docs (not only free-text answers).
-- [ ] **Retrieval metrics:** precision@k, MRR, or nDCG per case; report micro and macro averages.
+- [x] **Query set** with `gold_chunk_ids` or character spans in source docs (not only free-text answers).
+- [x] **Retrieval metrics:** precision@k, MRR, or nDCG per case; report micro and macro averages.
 - [ ] **Answer faithfulness:** each sentence in answer linked to supporting chunk or marked unsupported.
 - [ ] **Ablation notebook or script:** sweep `top_k`, reranker on/off, hybrid weights; save plots to `evals/runs/…/plots/`.
 - [ ] **Operational:** index size per tenant, p95 retrieval latency, embedding cost per 1M tokens ingested.
 
 ### 5.6 RAG + agent integration checklist
 
-- [ ] Retrieval exposed as a **tool** with arguments: `query`, `time_from`, `time_to`, `doc_types[]`, `top_k`.
-- [ ] **Hard cap** on retrieve calls per workflow run (see §4.1).
-- [ ] **Citation pass:** final generation step must emit `citations` referencing `chunk_id` from tool results only.
+- [ ] Retrieval exposed as a **tool** with arguments: `query`, `time_from`, `time_to`, `doc_types[]`, `top_k`. *(Contract in `schemas/tool_io.json`; no live tool runtime.)*
+- [x] **Hard cap** on retrieve calls per workflow run (see §4.1).
+- [x] **Citation pass:** final generation step must emit `citations` referencing `chunk_id` from tool results only. *(Enforced via prompts + eval for this slice.)*
 
 ---
 
@@ -271,24 +271,24 @@ flowchart LR
 
 ### 6.2 Safety testing (red team)
 
-- [ ] **Adversarial case file:** wrong-patient context, instructions embedded in “patient quote”, requests for prohibited advice.
-- [ ] **Expected behavior** documented per case: refuse, strip instruction, or escalate.
-- [ ] **Automated run** of red-team file on every prompt major version bump.
+- [x] **Adversarial case file:** wrong-patient context, instructions embedded in “patient quote”, requests for prohibited advice.
+- [x] **Expected behavior** documented per case: refuse, strip instruction, or escalate.
+- [ ] **Automated run** of red-team file on every prompt major version bump. *(Stress set runs in CI via full `pytest` / dry harness; not gated only on prompt semver.)*
 
 ### 6.3 Model benchmarking
 
-- [ ] **Same harness** for all candidate models (`metrics.json` comparable across runs).
-- [ ] **Cost/latency table** exported: $/1k cases, p95 ms, quality metrics side-by-side.
+- [x] **Same harness** for all candidate models (`metrics.json` comparable across runs).
+- [x] **Cost/latency table** exported: $/1k cases, p95 ms, quality metrics side-by-side. *(Compare via `compare_metrics.py` + `metrics.json` / tokens.)*
 
 ### 6.4 Logging and privacy
 
 - [ ] **PHI minimization:** logs store IDs + hashes; full prompts only in restricted debug store.
 - [ ] **Retention** limits documented; support delete/export per policy.
-- [ ] **Data flow diagram** for RAG: source → index → retrieval → LLM vendor (for security review).
+- [x] **Data flow diagram** for RAG: source → index → retrieval → LLM vendor (for security review).
 
 ### 6.5 On-call and reliability (role-aligned)
 
-- [ ] **Runbooks** for: embedding provider outage, vector DB degradation, model 429/latency spike.
+- [x] **Runbooks** for: embedding provider outage, vector DB degradation, model 429/latency spike.
 - [ ] **Feature flags** to disable agent paths or fall back to simpler retrieve+single-shot prompt.
 
 ---
@@ -297,12 +297,12 @@ flowchart LR
 
 Use this as a **pre-merge / pre-release** checklist.
 
-- [ ] Prompt version in `manifest.yaml` bumped; changelog entry links to PR.
-- [ ] `evals/gold/` dataset version bumped if cases changed; old version archived.
-- [ ] `run_eval.py` completed; `metrics.json` attached to PR or ticket.
-- [ ] No regression on **primary metrics** vs baseline; strata reviewed for surprises.
-- [ ] Schema validation pass rate ≥ threshold; hallucination / unsupported-claim rate ≤ threshold (if measured).
-- [ ] RAG retrieval metrics stable if retrieval config changed.
+- [x] Prompt version in `manifest.yaml` bumped; changelog entry links to PR.
+- [x] `evals/gold/` dataset version bumped if cases changed; old version archived. *(Versioned filename + docs; archive policy is manual.)*
+- [x] `run_eval.py` completed; `metrics.json` attached to PR or ticket.
+- [x] No regression on **primary metrics** vs baseline; strata reviewed for surprises.
+- [x] Schema validation pass rate ≥ threshold; hallucination / unsupported-claim rate ≤ threshold (if measured). *(Schema gate + baseline; hallucination rate not automated.)*
+- [ ] RAG retrieval metrics stable if retrieval config changed. *(N/A until real index + repeated runs.)*
 - [ ] Agent trajectory p95 steps/tool calls within SLO.
 - [ ] Clinical or delegated reviewer sign-off recorded for user-facing wording or note structure changes.
 

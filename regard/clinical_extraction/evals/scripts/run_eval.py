@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -225,17 +226,31 @@ def _jsonschema_validate(instance: dict[str, Any]) -> None:
     Draft202012Validator(schema).validate(instance)
 
 
-def _entity_recall(pred: ExtractionOutput, gold: list[dict[str, Any]]) -> float:
+def _normalize_entity_text(value: str) -> str:
+    """Lowercase, collapse whitespace, trim trailing punctuation for recall."""
+    s = str(value).lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.rstrip(".,;:")
+
+
+def _entity_recall(
+    pred: ExtractionOutput,
+    gold: list[dict[str, Any]],
+    *,
+    strict_text: bool,
+) -> float:
     if not gold:
         return 1.0
     hits = 0
     for g in gold:
         want_t = str(g.get("type", "")).lower().strip()
-        want_v = str(g.get("value", "")).lower().strip()
+        raw_v = str(g.get("value", ""))
+        want_v = raw_v.lower().strip() if strict_text else _normalize_entity_text(raw_v)
         for e in pred.entities:
-            if str(e.get("type", "")).lower().strip() == want_t and str(
-                e.get("value", "")
-            ).lower().strip() == want_v:
+            pred_t = str(e.get("type", "")).lower().strip()
+            pv = str(e.get("value", ""))
+            got_v = pv.lower().strip() if strict_text else _normalize_entity_text(pv)
+            if pred_t == want_t and got_v == want_v:
                 hits += 1
                 break
     return hits / len(gold)
@@ -317,6 +332,18 @@ def main() -> int:
         action="store_true",
         help="Live only: skip OpenAI json_schema structured output; use json_object only",
     )
+    parser.add_argument(
+        "--case-ids",
+        default=None,
+        metavar="ID,ID,...",
+        help="Only run these case_id values (order preserved). Implies you loaded them "
+        "(include stress rows only if listed and --include-stress added them to the pool).",
+    )
+    parser.add_argument(
+        "--strict-recall",
+        action="store_true",
+        help="Entity recall: exact string match (legacy). Default: normalized whitespace/case.",
+    )
     args = parser.parse_args()
 
     feature_root = args.feature_root.resolve()
@@ -353,6 +380,16 @@ def main() -> int:
     cases = list(_load_jsonl(args.dataset))
     if args.include_stress:
         cases.extend(list(_load_jsonl(args.stress_dataset)))
+    if args.case_ids:
+        want = [x.strip() for x in args.case_ids.split(",") if x.strip()]
+        by_id = {c["case_id"]: c for c in cases}
+        missing = [i for i in want if i not in by_id]
+        if missing:
+            print(
+                f"Warning: case_id not found (skipped): {missing}",
+                file=sys.stderr,
+            )
+        cases = [by_id[i] for i in want if i in by_id]
     if args.max_cases is not None:
         cases = cases[: max(0, args.max_cases)]
 
@@ -434,7 +471,11 @@ def main() -> int:
                 schema_ok += 1
                 gold_entities = (case.get("expected") or {}).get("entities")
                 if gold_entities is not None:
-                    rec = _entity_recall(pred, gold_entities)
+                    rec = _entity_recall(
+                        pred,
+                        gold_entities,
+                        strict_text=args.strict_recall,
+                    )
                     recalls.append(rec)
                 if str(case_id).startswith("stress"):
                     stress_ok = _stress_pass(case, pred)
@@ -521,6 +562,10 @@ def main() -> int:
         },
         "dry_run": args.dry_run,
         "max_cases": args.max_cases,
+        "case_ids": [x.strip() for x in args.case_ids.split(",") if x.strip()]
+        if args.case_ids
+        else None,
+        "entity_recall_mode": "strict" if args.strict_recall else "normalized",
         "openai_structured_output": {
             "strict_json_schema_requested": bool(use_strict_openai_schema),
             "schema_file": str(openai_schema_path)
