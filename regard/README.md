@@ -145,7 +145,7 @@ Each line in `cases.jsonl` should be valid JSON. **Minimum columns:**
 - [x] **Stratified reporting:** metrics broken out by `rubric_tags` *(document length quartiles: not yet.)*
 - [x] **Schema validation rate:** % outputs passing JSON Schema (gate at ≥ agreed threshold).
 - [x] **Slot metrics:** per-field precision/recall or exact match for coded fields.
-- [ ] **Hallucination protocol:** list of claims extracted from model output → each marked supported / unsupported / contradicted by `input`+`retrieved_chunks` (human or secondary model with **blinded** inputs).
+- [x] **Hallucination protocol:** list of claims extracted from model output → each marked supported / unsupported / contradicted by `input`+`retrieved_chunks` (human or secondary model with **blinded** inputs). *(Deterministic `evals/scripts/claim_support_report.py`: entity values vs merged chart + chunk texts + citation quotes; substring + token fallback. **Contradiction** not auto-detected—use human or blinded LLM for that and for ambiguous cases.)*
 - [ ] **LLM-as-judge:** rubric in `evals/rubrics/`; calibrate on ≥ N human-scored cases; report agreement (Cohen’s kappa or match rate).
 - [x] **Regression:** compare run to `baseline_run_id`; fail if any **primary metric** drops > agreed delta.
 

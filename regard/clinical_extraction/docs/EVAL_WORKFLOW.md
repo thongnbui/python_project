@@ -63,6 +63,20 @@ python regard/clinical_extraction/evals/scripts/export_predictions_csv.py \
 
 Adds columns: `gold_chart_excerpt` (truncated), `gold_expected_json`, `gold_rubric_tags`, `gold_notes_for_judge`. Omit chart column with `--chart-excerpt-chars 0`.
 
+### Claim support (grounding / hallucination triage)
+
+[`evals/scripts/claim_support_report.py`](../evals/scripts/claim_support_report.py) labels each **entity value** as `supported` or `unsupported` against the merged evidence string: `input.chart_excerpt`, all `retrieved_chunks[].text`, and all `citations[].quote`. Default: normalized substring match, with an optional **token fallback** (significant tokens must each match the corpus, including a simple **y ↔ -ies** plural check). Use `--no-token-fallback` for stricter checks. If `predictions.jsonl` `raw` omits `_meta` (API text before harness merge), the script injects a placeholder so Pydantic parsing matches `run_eval.py` validation.
+
+```bash
+python regard/clinical_extraction/evals/scripts/claim_support_report.py \
+  regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl \
+  --gold-jsonl regard/clinical_extraction/evals/gold/cases_v2026-04-13.jsonl \
+  --gold-jsonl regard/clinical_extraction/evals/gold/stress.jsonl \
+  -o regard/clinical_extraction/evals/runs/<run_id>/claim_support.json
+```
+
+You can pass a **run directory** instead of `predictions.jsonl`. Optional gate: `--max-unsupported-rate 0.05` exits non-zero if the share of unsupported entity claims exceeds the threshold.
+
 ### Summarize & compare runs
 
 ```bash
