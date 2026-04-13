@@ -67,6 +67,11 @@ def _build_support_corpus(case: dict[str, Any], pred: ExtractionOutput) -> str:
     return " ".join(parts)
 
 
+def build_support_corpus(case: dict[str, Any], pred: ExtractionOutput) -> str:
+    """Public helper: merge chart excerpt, chunk texts, and citation quotes."""
+    return _build_support_corpus(case, pred)
+
+
 def _significant_tokens(norm_claim: str) -> list[str]:
     return [
         t

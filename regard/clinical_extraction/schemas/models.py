@@ -43,3 +43,13 @@ def validate_extraction_json(data: str | bytes | dict[str, Any]) -> ExtractionOu
     if isinstance(data, (str, bytes)):
         return ExtractionOutput.model_validate_json(data)
     return ExtractionOutput.model_validate(data)
+
+
+class JudgeOutput(BaseModel):
+    """LLM-as-judge score aligned with evals/rubrics/note_quality.md."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: int = Field(ge=0, le=2)
+    rationale: str = ""
+    unsupported_claims: list[str] = Field(default_factory=list)

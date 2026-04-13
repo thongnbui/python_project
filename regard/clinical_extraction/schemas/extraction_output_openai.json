@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "entities": {
+      "type": "array",
+      "description": "Extracted problems, medications, labs as type+value pairs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "problem | medication | lab | other"
+          },
+          "value": { "type": "string" }
+        },
+        "required": ["type", "value"]
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "chunk_id": { "type": "string" },
+          "quote": { "type": "string" }
+        },
+        "required": ["chunk_id", "quote"]
+      }
+    },
+    "insufficient_context": { "type": "boolean" },
+    "clarifying_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "entities",
+    "citations",
+    "insufficient_context",
+    "clarifying_questions"
+  ]
+}

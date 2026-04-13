@@ -41,6 +41,9 @@ python evals/scripts/run_eval.py --dry-run --include-stress --case-ids ce-001,st
 python evals/scripts/export_predictions_csv.py evals/runs/<run_id>/predictions.jsonl \
   --gold-jsonl evals/gold/cases_v2026-04-13.jsonl --gold-jsonl evals/gold/stress.jsonl
 
+# LLM-as-judge (dry proxy, no key) or live judge — see docs/EVAL_WORKFLOW.md
+python evals/scripts/llm_judge_eval.py evals/runs/<run_id>/predictions.jsonl --dry-run
+
 # Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
 # or: make -C regard/clinical_extraction test

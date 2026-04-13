@@ -77,6 +77,39 @@ python regard/clinical_extraction/evals/scripts/claim_support_report.py \
 
 You can pass a **run directory** instead of `predictions.jsonl`. Optional gate: `--max-unsupported-rate 0.05` exits non-zero if the share of unsupported entity claims exceeds the threshold.
 
+### LLM-as-judge (live) and dry proxy
+
+[`evals/scripts/llm_judge_eval.py`](../evals/scripts/llm_judge_eval.py) scores each case on the **0–2 rubric** in [`evals/rubrics/note_quality.md`](../evals/rubrics/note_quality.md).
+
+**Dry-run (CI, no API):** deterministic proxy from `parse_ok`, `stress_ok`, entity grounding (same heuristics as `claim_support_report.py`), and `entity_recall` when present.
+
+```bash
+python regard/clinical_extraction/evals/scripts/llm_judge_eval.py \
+  regard/clinical_extraction/evals/runs/<run_id>/predictions.jsonl \
+  --dry-run -o /tmp/judge_report.json
+```
+
+**Live judge:** requires `OPENAI_API_KEY` (same `.env` loading order as `run_eval.py`). Prompt is **blinded**: only `chart_excerpt`, `retrieved_chunks`, and parsed model output—no gold `expected` and no `notes_for_judge`.
+
+```bash
+python regard/clinical_extraction/evals/scripts/llm_judge_eval.py \
+  regard/clinical_extraction/evals/runs/<run_id> \
+  --model gpt-4o-mini \
+  -o regard/clinical_extraction/evals/runs/<run_id>/judge_report.json
+```
+
+**Calibration:** add human labels (≥ N cases for a serious calibration story) as JSONL: one object per line with `case_id` and integer `score` in `{0,1,2}`.
+
+```bash
+python regard/clinical_extraction/evals/scripts/llm_judge_eval.py \
+  regard/clinical_extraction/evals/runs/<run_id> \
+  --dry-run \
+  --human-scores regard/clinical_extraction/evals/human_scores.example.jsonl \
+  -o /tmp/judge_calibrated.json
+```
+
+The report’s `calibration` block includes **`match_rate`** and **`cohens_kappa`** (unweighted) on cases present in both the run and `--human-scores`.
+
 ### Summarize & compare runs
 
 ```bash

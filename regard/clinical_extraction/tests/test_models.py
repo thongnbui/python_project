@@ -6,7 +6,11 @@ import json
 
 import pytest
 
-from regard.clinical_extraction.schemas.models import ExtractionOutput, validate_extraction_json
+from regard.clinical_extraction.schemas.models import (
+    ExtractionOutput,
+    JudgeOutput,
+    validate_extraction_json,
+)
 
 
 def test_valid_roundtrip() -> None:
@@ -33,6 +37,17 @@ def test_validate_json_string() -> None:
         }
     )
     validate_extraction_json(raw)
+
+
+def test_judge_output_valid() -> None:
+    jo = JudgeOutput.model_validate(
+        {
+            "score": 2,
+            "rationale": "Entities traceable to excerpt.",
+            "unsupported_claims": [],
+        }
+    )
+    assert jo.score == 2
 
 
 def test_reject_extra_top_level_key() -> None:

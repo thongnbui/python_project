@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "score": {
+      "type": "integer",
+      "description": "0 unsupported/unsafe, 1 minor drift, 2 fully supported per rubric.",
+      "enum": [0, 1, 2]
+    },
+    "rationale": {
+      "type": "string",
+      "description": "Brief justification using only excerpt and model output."
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "description": "Entity values or phrases lacking support in excerpt/chunks.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["score", "rationale", "unsupported_claims"]
+}
