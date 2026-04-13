@@ -1,0 +1,30 @@
+{
+  "trace_id": "fixture-recovery-001",
+  "tool_calls": [
+    {
+      "name": "retrieve_chart",
+      "outcome": "error",
+      "retry_count": 0,
+      "request": { "query": "problems", "top_k": 3, "doc_types": ["problem_list"] },
+      "response": {}
+    },
+    {
+      "name": "retrieve_chart",
+      "outcome": "ok",
+      "retry_count": 1,
+      "request": { "query": "problems", "top_k": 3, "doc_types": ["problem_list"] },
+      "response": {
+        "chunks": [
+          {
+            "chunk_id": "ch-1",
+            "text": "Problems: hypertension.",
+            "metadata": { "doc_type": "problem_list" }
+          }
+        ]
+      }
+    }
+  ],
+  "final": { "markdown": "## Note\n- Hypertension", "citations": [{ "chunk_id": "ch-1" }] },
+  "expected_final": { "markdown": "## Note\n- Hypertension", "citations": [{ "chunk_id": "ch-1" }] },
+  "metrics_expectation": { "recovery_expected": true }
+}

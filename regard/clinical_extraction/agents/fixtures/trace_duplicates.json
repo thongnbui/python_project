@@ -1,0 +1,17 @@
+{
+  "trace_id": "fixture-dup-001",
+  "tool_calls": [
+    {
+      "name": "retrieve_chart",
+      "request": { "query": "same", "top_k": 2 },
+      "response": { "chunks": [] }
+    },
+    {
+      "name": "retrieve_chart",
+      "request": { "query": "same", "top_k": 2 },
+      "response": { "chunks": [] }
+    }
+  ],
+  "final": { "markdown": "x", "citations": [] },
+  "expected_final": { "markdown": "x", "citations": [] }
+}
