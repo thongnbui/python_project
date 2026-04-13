@@ -1,0 +1,26 @@
+{
+  "trace_id": "fixture-ce-003",
+  "tool_calls": [
+    {
+      "name": "retrieve_chart",
+      "request": {
+        "query": "active problems CKD hyperlipidemia",
+        "top_k": 5,
+        "doc_types": ["problem_list"]
+      },
+      "response": {
+        "chunks": [
+          {
+            "chunk_id": "ch-enc-9-problems",
+            "text": "Active problems: CKD stage 3, hyperlipidemia.",
+            "metadata": { "doc_type": "problem_list" }
+          }
+        ]
+      }
+    }
+  ],
+  "final": {
+    "markdown": "## Assessment\n- CKD stage 3\n- Hyperlipidemia",
+    "citations": [{ "chunk_id": "ch-enc-9-problems" }]
+  }
+}

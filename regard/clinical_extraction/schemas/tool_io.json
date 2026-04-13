@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/clinical_extraction/tool_io.json",
+  "title": "AgentToolContracts",
+  "description": "Request/response shapes for tools referenced by workflow.yaml",
+  "type": "object",
+  "properties": {
+    "retrieve_chart": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "object",
+          "required": ["query", "top_k"],
+          "properties": {
+            "query": { "type": "string" },
+            "time_from": { "type": "string", "format": "date-time" },
+            "time_to": { "type": "string", "format": "date-time" },
+            "doc_types": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "top_k": { "type": "integer", "minimum": 1, "maximum": 50 }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["chunks"],
+          "properties": {
+            "chunks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["chunk_id", "text"],
+                "properties": {
+                  "chunk_id": { "type": "string" },
+                  "text": { "type": "string" },
+                  "metadata": { "type": "object" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "draft_progress_note": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "object",
+          "required": ["sections", "context_chunk_ids"],
+          "properties": {
+            "sections": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "context_chunk_ids": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "response": {
+          "type": "object",
+          "required": ["markdown", "citations"],
+          "properties": {
+            "markdown": { "type": "string" },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["chunk_id"],
+                "properties": { "chunk_id": { "type": "string" } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

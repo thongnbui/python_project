@@ -1,0 +1,9 @@
+flowchart LR
+  A[parse_intent] --> B[retrieve_chart]
+  B --> C{enough_context?}
+  C -->|no| D[clarify_or_stop]
+  C -->|yes| E[draft_section]
+  E --> F[self_check_citations]
+  F --> G{pass?}
+  G -->|no| B
+  G -->|yes| H[return]

@@ -1,0 +1,36 @@
+# Agent workflow caps and tool allowlist (documentation + stub runner).
+
+workflow_id: progress_note_assist_v0
+owner: eng-placeholder
+
+caps:
+  max_steps: 12
+  max_tool_calls: 8
+  max_wall_ms: 60000
+  max_tokens_total: 8000
+  max_retrieve_calls: 3
+
+tools_allowlist:
+  - retrieve_chart
+  - draft_progress_note
+
+escalation:
+  on_repeated_retrieval_failure: "return_partial_with_errors"
+  on_schema_validation_failure: "fail_closed"
+  on_timeout: "fail_closed_with_trace_id"
+
+tracing:
+  otel_span_prefix: "regard.clinical_extraction"
+  phi_in_spans: false
+
+state_schema:
+  fields:
+    intent: string
+    scratchpad: string
+    retrieved_chunks: array
+    draft_note: object
+    errors: array
+    trace_id: string
+
+parallelism:
+  retrieve_and_summarize_prior: false # sequential for clinical consistency v0

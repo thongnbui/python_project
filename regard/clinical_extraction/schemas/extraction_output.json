@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/clinical_extraction/extraction_output.json",
+  "title": "ClinicalExtractionOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entities",
+    "citations",
+    "insufficient_context",
+    "clarifying_questions",
+    "_meta"
+  ],
+  "properties": {
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "value"],
+        "additionalProperties": true,
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "problem | medication | lab | other"
+          },
+          "value": { "type": "string" },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["chunk_id", "quote"],
+        "properties": {
+          "chunk_id": { "type": "string" },
+          "quote": { "type": "string" }
+        }
+      }
+    },
+    "insufficient_context": { "type": "boolean" },
+    "clarifying_questions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "_meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_version", "model"],
+      "properties": {
+        "prompt_version": { "type": "string" },
+        "model": { "type": "string" },
+        "warnings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

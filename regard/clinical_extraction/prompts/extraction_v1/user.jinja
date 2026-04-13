@@ -1,0 +1,30 @@
+## Chart excerpt
+{{ chart_excerpt }}
+
+{% if retrieved_chunks and retrieved_chunks|length > 0 %}
+## Retrieved chunks (cite using chunk_id)
+{% for c in retrieved_chunks %}
+### chunk_id: {{ c.chunk_id }}
+{{ c.text }}
+{% endfor %}
+{% endif %}
+
+## What to extract
+From the excerpt (and chunks if present), capture anything stated about:
+- active problems / diagnoses
+- medications (include dose and frequency if given)
+- most recent A1c (or HbA1c) value and date if given
+
+## Required JSON shape (exact keys — no others)
+Return **one** JSON object with **only** these top-level keys:
+
+1. **`entities`** — array of objects, each with:
+   - `"type"`: one of `"problem"`, `"medication"`, `"lab"`
+   - `"value"`: one concise string (e.g. `"Type 2 diabetes mellitus"`, `"metformin 500 mg BID"`, `"HbA1c 7.2% on 2025-01-10"`)
+2. **`citations`** — array of `{"chunk_id": string, "quote": string}`. If there are **no** retrieved chunks, use `"chunk_id": "excerpt"` and a **short verbatim quote** from the chart excerpt. If chunks exist, prefer their `chunk_id` values.
+3. **`insufficient_context`** — boolean
+4. **`clarifying_questions`** — array of strings (use `[]` if nothing is needed)
+
+Do **not** use different key names such as `active_problems`, `medications`, `most_recent_A1c`, or `diagnoses`.
+
+Example structure (one line, no markdown): {"entities":[{"type":"problem","value":"Example"}],"citations":[{"chunk_id":"excerpt","quote":"verbatim"}],"insufficient_context":false,"clarifying_questions":[]}

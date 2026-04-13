@@ -1,0 +1,8 @@
+# Eval run outputs (regenerable; may contain sensitive experiment data)
+**/evals/runs/
+
+# Local Python 3.12 environment for Regard slice
+venv312/
+
+# Secrets for local live eval
+clinical_extraction/.env

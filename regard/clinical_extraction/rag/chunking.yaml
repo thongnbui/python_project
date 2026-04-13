@@ -1,0 +1,32 @@
+# Chunking policy for EHR-derived text (prototype).
+
+embedding:
+  model: "text-embedding-3-small"
+  dimensions: 1536
+  version: "2026-04-13"
+
+strategy:
+  mode: "heading_then_token" # alternatives: fixed_token, encounter_window
+  max_tokens: 512
+  overlap_tokens: 64
+  respect_note_sections: true
+
+metadata_fields_required:
+  - chunk_id
+  - patient_id
+  - encounter_id
+  - doc_type
+  - section
+  - effective_time
+  - source_uri
+
+deduplication:
+  text_hash: "sha256"
+
+parent_child:
+  enabled: false
+  child_max_tokens: 256
+  parent_expand: true
+
+backfill:
+  when_embedding_model_changes: "Re-embed all chunks; rebuild vector index; run retrieval regression suite."
