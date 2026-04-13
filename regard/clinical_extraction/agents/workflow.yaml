@@ -20,6 +20,8 @@ escalation:
   on_timeout: "fail_closed_with_trace_id"
 
 tracing:
+  # Python: regard.clinical_extraction.agents.workflow_stub + agents/tracing.py
+  # Spans: {otel_span_prefix}.workflow.run, {otel_span_prefix}.step.<tool_name>
   otel_span_prefix: "regard.clinical_extraction"
   phi_in_spans: false
 

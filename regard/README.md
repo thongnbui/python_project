@@ -146,7 +146,7 @@ Each line in `cases.jsonl` should be valid JSON. **Minimum columns:**
 - [x] **Schema validation rate:** % outputs passing JSON Schema (gate at ≥ agreed threshold).
 - [x] **Slot metrics:** per-field precision/recall or exact match for coded fields.
 - [x] **Hallucination protocol:** list of claims extracted from model output → each marked supported / unsupported / contradicted by `input`+`retrieved_chunks` (human or secondary model with **blinded** inputs). *(Deterministic `evals/scripts/claim_support_report.py`: entity values vs merged chart + chunk texts + citation quotes; substring + token fallback. **Contradiction** not auto-detected—use human or blinded LLM for that and for ambiguous cases.)*
-- [x] **LLM-as-judge:** rubric in `evals/rubrics/`; calibrate on ≥ N human-scored cases; report agreement (Cohen’s kappa or match rate). *(Live: `evals/scripts/llm_judge_eval.py` with blinded inputs + `schemas/judge_output_openai.json`. **Dry-run** uses deterministic proxy from grounding + recall + stress. **`--human-scores`** JSONL → `match_rate` + unweighted Cohen’s κ on overlapping `case_id`s. Example human rows: `evals/human_scores.example.jsonl`.)*
+- [x] **LLM-as-judge:** rubric in `evals/rubrics/`; calibrate on ≥ N human-scored cases; report agreement (Cohen’s kappa or match rate). *(Live: `evals/scripts/llm_judge_eval.py` with blinded inputs + `schemas/judge_output_openai.json`. **Dry-run** uses deterministic proxy from grounding + recall + stress. **`--human-scores`** JSONL → `match_rate`, unweighted κ, and **linear weighted** κ (ordinal 0–2). **`--min-calibration-n`** gates minimum overlap. Example human rows: `evals/human_scores.example.jsonl`.)*
 - [x] **Regression:** compare run to `baseline_run_id`; fail if any **primary metric** drops > agreed delta.
 
 ### 3.5 Evaluate — `run_eval.py` behavior checklist
@@ -168,7 +168,7 @@ Each line in `cases.jsonl` should be valid JSON. **Minimum columns:**
 - [x] **Tool inventory table:** name, input schema, output schema, timeout, idempotency, rate limit.
 - [x] **Caps:** `max_steps`, `max_tool_calls`, `max_wall_ms`, `max_tokens_total`.
 - [x] **Escalation:** when to return partial result + human task vs retry vs fail closed.
-- [ ] **Tracing:** OpenTelemetry span names per step; **no raw PHI** in span attributes—use hashed IDs.
+- [x] **Tracing:** OpenTelemetry span names per step; **no raw PHI** in span attributes—use hashed IDs. *(Implemented in `clinical_extraction/agents/tracing.py` + `workflow_stub.py`: `{prefix}.workflow.run`, `{prefix}.step.<tool_name>`; `trace.id_hash` only. Requires `opentelemetry-api` / `opentelemetry-sdk`.)*
 
 Example **Mermaid** stub for documentation:
 

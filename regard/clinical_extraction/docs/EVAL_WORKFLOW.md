@@ -108,7 +108,7 @@ python regard/clinical_extraction/evals/scripts/llm_judge_eval.py \
   -o /tmp/judge_calibrated.json
 ```
 
-The report’s `calibration` block includes **`match_rate`** and **`cohens_kappa`** (unweighted) on cases present in both the run and `--human-scores`.
+The report’s `calibration` block includes **`match_rate`**, **`cohens_kappa`** (unweighted exact agreement), and **`cohens_kappa_linear_weighted`** (ordinal 0–2, linear weights). Use **`--min-calibration-n N`** with **`--human-scores`** to fail with exit code **1** when the overlap count is below **N** (the JSON report still includes `calibration_gate_failed: true`).
 
 ### Summarize & compare runs
 

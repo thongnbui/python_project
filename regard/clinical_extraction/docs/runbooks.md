@@ -23,3 +23,8 @@
 
 - **Disable agent path:** fall back to single-shot `retrieve_chart` + one extraction call (document in deploy config).
 - **Disable RAG:** pass empty `retrieved_chunks` only when policy allows chart-only mode.
+
+## Workflow tracing (OpenTelemetry)
+
+- **Stub:** `agents/workflow_stub.py` emits `{otel_span_prefix}.workflow.run` and `{otel_span_prefix}.step.<tool_name>` (prefix from `agents/workflow.yaml`). Attributes use **`trace.id_hash`** (SHA-256 of the fixture `trace_id` string) and tool metadata only—no chart text or queries.
+- **Production:** attach an OTLP or console exporter to the process `TracerProvider`; keep `phi_in_spans: false` in config and review span attributes in staging.

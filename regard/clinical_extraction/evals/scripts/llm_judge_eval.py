@@ -6,7 +6,9 @@
 * **Dry-run:** deterministic **proxy** from parse_ok, stress_ok, entity grounding
   (``claim_support_report``), and ``entity_recall`` — for CI without API keys.
 * **Calibration:** optional ``--human-scores`` JSONL with ``case_id`` + ``score``;
-  reports exact **match rate** and **Cohen's kappa** (unweighted) on overlapping cases.
+  reports **match rate**, **Cohen's κ** (unweighted), and **linear weighted κ** (ordinal 0–2).
+  Optional ``--min-calibration-n N`` exits non-zero when overlap count is below *N*
+  (requires ``--human-scores``).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import importlib.util
 import json
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -95,6 +98,43 @@ def _cohen_kappa(labels_a: list[int], labels_b: list[int]) -> float:
         return sum(1 for x in xs if x == c) / n
 
     p_e = sum(p_marg(labels_a, c) * p_marg(labels_b, c) for c in cats)
+    if abs(1.0 - p_e) < 1e-12:
+        return 1.0 if abs(1.0 - p_o) < 1e-12 else 0.0
+    return (p_o - p_e) / (1.0 - p_e)
+
+
+def _linear_weighted_kappa(
+    labels_a: list[int],
+    labels_b: list[int],
+    *,
+    min_score: int = 0,
+    max_score: int = 2,
+) -> float:
+    """Linear weighted Cohen's kappa for ordinal scores on a fixed scale.
+
+    Weight ``w(i,j) = 1 - |i-j| / (max_score - min_score)``; chance uses both
+    raters' marginals (same form as unweighted κ but with weighted agreement).
+    """
+    if len(labels_a) != len(labels_b) or not labels_a:
+        return float("nan")
+    n = len(labels_a)
+    scale = max_score - min_score
+    if scale <= 0:
+        return float("nan")
+
+    def w(i: int, j: int) -> float:
+        return 1.0 - abs(i - j) / scale
+
+    p_o = sum(w(a, b) for a, b in zip(labels_a, labels_b)) / n
+
+    ca = Counter(labels_a)
+    cb = Counter(labels_b)
+    cats = sorted(set(labels_a) | set(labels_b))
+    p_e = 0.0
+    for i in cats:
+        for j in cats:
+            p_e += w(i, j) * (ca[i] / n) * (cb[j] / n)
+
     if abs(1.0 - p_e) < 1e-12:
         return 1.0 if abs(1.0 - p_o) < 1e-12 else 0.0
     return (p_o - p_e) / (1.0 - p_e)
@@ -284,7 +324,24 @@ def main() -> int:
         action="store_true",
         help="Skip json_schema strict (live only); use json_object.",
     )
+    parser.add_argument(
+        "--min-calibration-n",
+        type=int,
+        default=None,
+        metavar="N",
+        help="With --human-scores, exit 1 if overlapping case count < N.",
+    )
     args = parser.parse_args()
+
+    if args.min_calibration_n is not None and args.human_scores is None:
+        print(
+            "--min-calibration-n requires --human-scores",
+            file=sys.stderr,
+        )
+        return 2
+    if args.min_calibration_n is not None and args.min_calibration_n < 0:
+        print("--min-calibration-n must be >= 0", file=sys.stderr)
+        return 2
 
     pred_path = _parse_predictions_path(args.predictions_jsonl_or_run_dir)
     if not args.gold_jsonl:
@@ -407,11 +464,26 @@ def main() -> int:
             matches = sum(1 for a, b in zip(paired_a, paired_b) if a == b)
             calibration["match_rate"] = round(matches / len(paired_a), 4)
             calibration["cohens_kappa"] = round(float(_cohen_kappa(paired_a, paired_b)), 4)
+            calibration["cohens_kappa_linear_weighted"] = round(
+                float(_linear_weighted_kappa(paired_a, paired_b)),
+                4,
+            )
 
     mean_score = (
         sum(e["score"] for e in per_case) / len(per_case) if per_case else None
     )
-    report = {
+    gate_failed = False
+    if args.min_calibration_n is not None:
+        no = int(calibration.get("n_overlap", 0))
+        if no < args.min_calibration_n:
+            print(
+                f"Calibration overlap {no} < required --min-calibration-n "
+                f"{args.min_calibration_n}",
+                file=sys.stderr,
+            )
+            gate_failed = True
+
+    report: dict[str, Any] = {
         "predictions": str(pred_path),
         "dry_run": args.dry_run,
         "model": args.model if not args.dry_run else None,
@@ -422,6 +494,8 @@ def main() -> int:
         },
         "calibration": calibration,
     }
+    if gate_failed:
+        report["calibration_gate_failed"] = True
     text = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -429,7 +503,7 @@ def main() -> int:
         print(f"Wrote {args.output}", file=sys.stderr)
     else:
         sys.stdout.write(text)
-    return 0
+    return 1 if gate_failed else 0
 
 
 if __name__ == "__main__":

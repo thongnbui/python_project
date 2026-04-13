@@ -28,4 +28,4 @@ Do not leak `notes_for_judge` into the rationale if they contain hidden answers;
 ## Automation
 
 - **Live LLM judge + dry proxy:** run [`evals/scripts/llm_judge_eval.py`](../scripts/llm_judge_eval.py) on `predictions.jsonl` (see `docs/EVAL_WORKFLOW.md`). Live mode uses this rubric in the system prompt; inputs are **blinded** (no `expected`, no `notes_for_judge`).
-- **Human calibration:** collect ≥ N rows in JSONL (`case_id`, `score` 0–2); pass `--human-scores` to report **match rate** and **Cohen's κ** vs machine scores. Example rows: [`evals/human_scores.example.jsonl`](../human_scores.example.jsonl).
+- **Human calibration:** collect ≥ N rows in JSONL (`case_id`, `score` 0–2); pass `--human-scores` to report **match rate**, **Cohen's κ** (unweighted), and **linear weighted κ** (ordinal). Use **`--min-calibration-n N`** to require at least N overlapping cases. Example rows: [`evals/human_scores.example.jsonl`](../human_scores.example.jsonl).
