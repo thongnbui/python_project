@@ -56,6 +56,13 @@ python evals/scripts/answer_faithfulness.py agents/fixtures/trace_ce-003.json
 python evals/scripts/verify_prompt_stress_gate.py
 python evals/scripts/failure_review_summarize.py evals/runs/<run_id>/predictions.jsonl -o /tmp/review.md
 
+# Multi-turn agent CLI (OpenAI tool-calling; tools are mocked — no real vector DB)
+# Offline (no key):  python agents/chat_cli.py --offline --script agents/chat_example.txt
+# Live (key in .env):  cp .env.example .env  # once; same OPENAI_API_KEY as run_eval
+#   then:  python agents/chat_cli.py --script agents/chat_example.txt
+#   or:    python agents/chat_cli.py   # interactive; loads repo .env then this folder’s .env
+# Interactive mock:  python agents/chat_cli.py --offline
+
 # Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
 # or: make -C regard/clinical_extraction test
