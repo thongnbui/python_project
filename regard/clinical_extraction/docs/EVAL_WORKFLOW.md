@@ -232,4 +232,13 @@ Role-based chunk filtering (offline): [`rag/access.py`](../rag/access.py). Contr
 
 GitHub Actions runs **`pytest regard/clinical_extraction/tests`** on changes under `regard/clinical_extraction/` (includes dry-run + committed `baseline_metrics.json` regression). No `OPENAI_API_KEY` required.
 
+After tests, **prompt stress gate:** `evals/scripts/verify_prompt_stress_gate.py` (manifest `major.minor` must not exceed `evals/gates/prompt_stress_baseline.txt` without updating that file).
+
 Workflow: [`.github/workflows/regard-clinical-extraction.yml`](../../../.github/workflows/regard-clinical-extraction.yml).
+
+### Compliance + release helpers
+
+- PHI / retention templates: [`compliance/`](../compliance/) YAML.
+- Sign-off templates: [`docs/templates/PLAYBOOK_SIGNOFFS.md`](../docs/templates/PLAYBOOK_SIGNOFFS.md).
+- RAG ablation diff gate: `evals/scripts/compare_rag_ablation.py baseline.json candidate.json`.
+- Trajectory SLO: `agents/workflow_stub.py --fixtures-dir agents/fixtures --enforce-slo`.

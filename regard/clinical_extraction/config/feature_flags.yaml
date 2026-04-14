@@ -1,0 +1,12 @@
+# Runtime feature flags (read by run_eval + deploy docs). Override with env vars.
+
+flags:
+  disable_agent_path:
+    env: REGARD_FF_DISABLE_AGENT_PATH
+    description: "When true, product should not invoke multi-step agent graph."
+    default: false
+
+  fallback_single_shot:
+    env: REGARD_FF_FALLBACK_SINGLE_SHOT
+    description: "Prefer single retrieve_chart + one extraction call instead of agent."
+    default: false

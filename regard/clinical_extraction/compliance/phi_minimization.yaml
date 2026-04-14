@@ -1,0 +1,11 @@
+# PHI minimization (design contract; enforce in logging layer — playbook §6.4).
+
+defaults:
+  log_patient_id: "hash_only" # store SHA-256 prefix; never raw MRN in shared logs
+  log_encounter_id: "hash_only"
+  log_note_text: "omit" # except restricted debug store with ACL
+  log_llm_prompts: "restricted_store_only"
+
+restricted_debug_store:
+  access: "break_glass_role + audit_log"
+  retention_days: 14

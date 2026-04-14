@@ -33,3 +33,8 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python -m pytest regard/clinical_extraction/tests -q
+
+      - name: Prompt major.minor stress gate
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python regard/clinical_extraction/evals/scripts/verify_prompt_stress_gate.py

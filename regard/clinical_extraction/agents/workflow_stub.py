@@ -196,6 +196,11 @@ def main() -> int:
         metavar="N",
         help="Exit 1 if duplicate_extra_calls > N (CI gate).",
     )
+    parser.add_argument(
+        "--enforce-slo",
+        action="store_true",
+        help="With --fixtures-dir, exit 1 if trajectory p95 > agents/slo.yaml limit.",
+    )
     args = parser.parse_args()
 
     caps = load_workflow_caps(args.feature_root)
@@ -203,6 +208,17 @@ def main() -> int:
         paths = sorted(args.fixtures_dir.glob("*.json"))
         report = batch_fixtures_metrics(paths, caps)
         print(json.dumps(report, indent=2))
+        if args.enforce_slo:
+            slo_path = args.feature_root / "agents" / "slo.yaml"
+            slo = yaml.safe_load(slo_path.read_text(encoding="utf-8"))
+            limit = (slo.get("agent_trajectory") or {}).get("max_p95_trajectory_steps", 8)
+            p95 = (report.get("aggregate") or {}).get("trajectory_tool_calls", {}).get("p95")
+            if p95 is not None and float(p95) > float(limit):
+                print(
+                    f"SLO breach: trajectory p95={p95} > max_p95_trajectory_steps={limit}",
+                    file=sys.stderr,
+                )
+                return 1
         return 0
 
     fixture = load_fixture(args.fixture)

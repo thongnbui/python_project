@@ -1,0 +1,5 @@
+# Agent trajectory SLOs (offline regression vs replay fixtures).
+
+agent_trajectory:
+  # Fail ``workflow_stub.py --fixtures-dir`` when p95 tool-call count exceeds this.
+  max_p95_trajectory_steps: 8

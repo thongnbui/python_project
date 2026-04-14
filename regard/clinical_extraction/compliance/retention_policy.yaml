@@ -1,0 +1,19 @@
+# Data retention (template; legal must approve — playbook §6.4).
+
+artifacts:
+  eval_runs_local:
+    description: "evals/runs/* on developer machines"
+    default_retention_days: 30
+    delete_command: "rm -rf regard/clinical_extraction/evals/runs/<id>"
+
+  structured_agent_logs:
+    description: "NDJSON from REGARD_AGENT_LOG_PATH"
+    default_retention_days: 90
+
+  debug_bundles:
+    description: "export_debug_bundle.py output"
+    default_retention_days: 14
+
+export_on_request:
+  supported: true
+  format: "JSON bundle + audit trail entry"

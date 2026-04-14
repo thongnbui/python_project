@@ -41,6 +41,24 @@ def _load_env_files(feature_root: Path) -> None:
     load_dotenv(feature_root / ".env", override=True)
 
 
+def _emit_active_feature_flags(feature_root: Path) -> None:
+    """Log active deploy flags from ``config/feature_flags.yaml`` + env (no secrets)."""
+    path = feature_root / "config" / "feature_flags.yaml"
+    if not path.is_file():
+        return
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    active: dict[str, bool] = {}
+    for name, spec in (data.get("flags") or {}).items():
+        envk = str(spec.get("env") or "")
+        if envk and os.environ.get(envk, "").strip().lower() in ("1", "true", "yes", "on"):
+            active[name] = True
+    if active:
+        print(
+            json.dumps({"regard_feature_flags": active}, ensure_ascii=False),
+            file=sys.stderr,
+        )
+
+
 def _git_sha() -> str:
     try:
         return (
@@ -348,6 +366,7 @@ def main() -> int:
 
     feature_root = args.feature_root.resolve()
     _load_env_files(feature_root)
+    _emit_active_feature_flags(feature_root)
 
     if not args.dry_run and not os.environ.get("OPENAI_API_KEY", "").strip():
         print(

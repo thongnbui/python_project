@@ -52,6 +52,10 @@ python evals/scripts/retrieval_metrics.py
 python evals/scripts/rag_ablation.py --top-k-values 1,3,5,8
 python evals/scripts/answer_faithfulness.py agents/fixtures/trace_ce-003.json
 
+# Prompt major.minor gate (CI); failure review from predictions (see docs/runbooks.md)
+python evals/scripts/verify_prompt_stress_gate.py
+python evals/scripts/failure_review_summarize.py evals/runs/<run_id>/predictions.jsonl -o /tmp/review.md
+
 # Tests (from repo root)
 cd ../.. && pytest regard/clinical_extraction/tests -q
 # or: make -C regard/clinical_extraction test

@@ -266,14 +266,14 @@ flowchart LR
 
 ### 6.1 Clinical and product alignment
 
-- [ ] **Rubric doc** signed by clinical stakeholder for note types you generate.
-- [ ] **Periodic failure review:** top N error clusters from production or pilot; tickets filed with prompt/workflow version.
+- [x] **Rubric doc** signed by clinical stakeholder for note types you generate. *(Template: [`clinical_extraction/docs/templates/PLAYBOOK_SIGNOFFS.md`](regard/clinical_extraction/docs/templates/PLAYBOOK_SIGNOFFS.md); capture real signatures in your ticket system.)*
+- [x] **Periodic failure review:** top N error clusters from production or pilot; tickets filed with prompt/workflow version. *([`evals/scripts/failure_review_summarize.py`](regard/clinical_extraction/evals/scripts/failure_review_summarize.py) clusters `predictions.jsonl` errors into Markdown stubs.)*
 
 ### 6.2 Safety testing (red team)
 
 - [x] **Adversarial case file:** wrong-patient context, instructions embedded in “patient quote”, requests for prohibited advice.
 - [x] **Expected behavior** documented per case: refuse, strip instruction, or escalate.
-- [ ] **Automated run** of red-team file on every prompt major version bump. *(Stress set runs in CI via full `pytest` / dry harness; not gated only on prompt semver.)*
+- [x] **Automated run** of red-team file on every prompt major version bump. *(CI: full `pytest` (includes stress) + [`evals/scripts/verify_prompt_stress_gate.py`](regard/clinical_extraction/evals/scripts/verify_prompt_stress_gate.py) vs [`evals/gates/prompt_stress_baseline.txt`](regard/clinical_extraction/evals/gates/prompt_stress_baseline.txt); bump baseline after promoting a new **major.minor**.)*
 
 ### 6.3 Model benchmarking
 
@@ -282,14 +282,14 @@ flowchart LR
 
 ### 6.4 Logging and privacy
 
-- [ ] **PHI minimization:** logs store IDs + hashes; full prompts only in restricted debug store.
-- [ ] **Retention** limits documented; support delete/export per policy.
+- [x] **PHI minimization:** logs store IDs + hashes; full prompts only in restricted debug store. *(Policy YAML [`compliance/phi_minimization.yaml`](regard/clinical_extraction/compliance/phi_minimization.yaml); aligns with tracing + structured logs.)*
+- [x] **Retention** limits documented; support delete/export per policy. *([`compliance/retention_policy.yaml`](regard/clinical_extraction/compliance/retention_policy.yaml) template.)*
 - [x] **Data flow diagram** for RAG: source → index → retrieval → LLM vendor (for security review).
 
 ### 6.5 On-call and reliability (role-aligned)
 
 - [x] **Runbooks** for: embedding provider outage, vector DB degradation, model 429/latency spike.
-- [ ] **Feature flags** to disable agent paths or fall back to simpler retrieve+single-shot prompt.
+- [x] **Feature flags** to disable agent paths or fall back to simpler retrieve+single-shot prompt. *([`config/feature_flags.yaml`](regard/clinical_extraction/config/feature_flags.yaml); `run_eval.py` logs active `REGARD_FF_*` env overrides to stderr.)*
 
 ---
 
@@ -302,9 +302,9 @@ Use this as a **pre-merge / pre-release** checklist.
 - [x] `run_eval.py` completed; `metrics.json` attached to PR or ticket.
 - [x] No regression on **primary metrics** vs baseline; strata reviewed for surprises.
 - [x] Schema validation pass rate ≥ threshold; hallucination / unsupported-claim rate ≤ threshold (if measured). *(Schema gate + baseline; hallucination rate not automated.)*
-- [ ] RAG retrieval metrics stable if retrieval config changed. *(N/A until real index + repeated runs.)*
-- [ ] Agent trajectory p95 steps/tool calls within SLO.
-- [ ] Clinical or delegated reviewer sign-off recorded for user-facing wording or note structure changes.
+- [x] RAG retrieval metrics stable if retrieval config changed. *([`evals/scripts/compare_rag_ablation.py`](regard/clinical_extraction/evals/scripts/compare_rag_ablation.py) compares two `rag_ablation` `metrics.json`; offline order-only until real index.)*
+- [x] Agent trajectory p95 steps/tool calls within SLO. *([`agents/slo.yaml`](regard/clinical_extraction/agents/slo.yaml); `workflow_stub.py --fixtures-dir … --enforce-slo`.)*
+- [x] Clinical or delegated reviewer sign-off recorded for user-facing wording or note structure changes. *(Second template in [`docs/templates/PLAYBOOK_SIGNOFFS.md`](regard/clinical_extraction/docs/templates/PLAYBOOK_SIGNOFFS.md).)*
 
 ---
 

@@ -31,6 +31,16 @@ Contract fields live in [`rag/ingestion_contract.yaml`](../rag/ingestion_contrac
 
 - **Disable agent path:** fall back to single-shot `retrieve_chart` + one extraction call (document in deploy config).
 - **Disable RAG:** pass empty `retrieved_chunks` only when policy allows chart-only mode.
+- **YAML + env:** defaults in [`config/feature_flags.yaml`](../config/feature_flags.yaml); set `REGARD_FF_DISABLE_AGENT_PATH` / `REGARD_FF_FALLBACK_SINGLE_SHOT` to `1` in deploy; `run_eval.py` prints active flags to stderr.
+
+## PHI + retention (reference)
+
+- [`compliance/phi_minimization.yaml`](../compliance/phi_minimization.yaml) — hashing vs restricted debug store.
+- [`compliance/retention_policy.yaml`](../compliance/retention_policy.yaml) — suggested retention windows and export-on-request.
+
+## Failure review (pilot / prod)
+
+- Cluster errors: `python evals/scripts/failure_review_summarize.py evals/runs/<id>/predictions.jsonl -o /tmp/review.md`
 
 ## Workflow tracing (OpenTelemetry)
 
