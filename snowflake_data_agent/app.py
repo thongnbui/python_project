@@ -13,6 +13,7 @@ Run it with::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from typing import Any, Optional
@@ -96,9 +97,9 @@ database/schema, missing privileges, warehouse not running).
 """
 
 
-def welcome_message() -> str:
+def welcome_message(database: str) -> str:
     """Intro shown at the start of a fresh conversation."""
-    database = os.getenv("SNOWFLAKE_DATABASE", "your Snowflake account")
+    database = database or "your Snowflake account"
     return f"""\
 👋 **Hi! I'm your Snowflake Data Scientist.**
 
@@ -129,33 +130,16 @@ What would you like to explore? 🔬"""
 # --------------------------------------------------------------------------- #
 # Connection
 # --------------------------------------------------------------------------- #
-def build_server_params() -> tuple[Optional[StdioServerParameters], list[str]]:
-    """Build MCP server launch parameters from environment variables.
+def build_server_params(creds: dict) -> StdioServerParameters:
+    """Build MCP server launch parameters from a credentials dict.
 
-    Returns a tuple of (params, missing_required_vars).
+    ``creds`` is expected to contain ``account``, ``user``, ``password`` and
+    ``warehouse`` and ``database`` (validated by the login form), plus optional
+    ``role`` and ``schema``.
     """
-    account = os.getenv("SNOWFLAKE_ACCOUNT")
-    user = os.getenv("SNOWFLAKE_USER")
-    password = os.getenv("SNOWFLAKE_PASSWORD")
-    warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
-    role = os.getenv("SNOWFLAKE_ROLE")
-    database = os.getenv("SNOWFLAKE_DATABASE")
-    # SNOWFLAKE_SCHEMA is optional: when omitted we default to INFORMATION_SCHEMA
+    # SNOWFLAKE schema is optional: when omitted we default to INFORMATION_SCHEMA
     # so the agent can explore every schema in the database freely.
-    schema = os.getenv("SNOWFLAKE_SCHEMA") or DEFAULT_SCHEMA
-
-    # The mcp_snowflake_server requires a default database to connect (it asserts
-    # on it), in addition to the core credentials.
-    required = {
-        "SNOWFLAKE_ACCOUNT": account,
-        "SNOWFLAKE_USER": user,
-        "SNOWFLAKE_PASSWORD": password,
-        "SNOWFLAKE_WAREHOUSE": warehouse,
-        "SNOWFLAKE_DATABASE": database,
-    }
-    missing = [name for name, value in required.items() if not value]
-    if missing:
-        return None, missing
+    schema = creds.get("schema") or DEFAULT_SCHEMA
 
     # The server's console script name. ``uvx`` will fetch it on first run.
     command = os.getenv("SNOWFLAKE_MCP_COMMAND", "uvx")
@@ -172,47 +156,108 @@ def build_server_params() -> tuple[Optional[StdioServerParameters], list[str]]:
                 args += ["--with", spec]
 
     args += [package]
-    args += ["--account", account, "--user", user, "--password", password]
-    args += ["--warehouse", warehouse]
-    if role:
-        args += ["--role", role]
-    if database:
-        args += ["--database", database]
-    if schema:
-        args += ["--schema", schema]
+    args += ["--account", creds["account"], "--user", creds["user"]]
+    args += ["--password", creds["password"], "--warehouse", creds["warehouse"]]
+    if creds.get("role"):
+        args += ["--role", creds["role"]]
+    args += ["--database", creds["database"], "--schema", schema]
 
     # Pass through the parent environment so ``uvx``/PATH resolve correctly.
     env = {k: v for k, v in os.environ.items()}
-    return StdioServerParameters(command=command, args=args, env=env), []
+    return StdioServerParameters(command=command, args=args, env=env)
 
 
 @st.cache_resource(show_spinner="Connecting to Snowflake via MCP...")
-def get_mcp_client(cache_key: str) -> SnowflakeMCPClient:
-    """Create (and cache) the MCP client for the current connection settings.
+def get_mcp_client(cache_key: str, _creds: dict) -> SnowflakeMCPClient:
+    """Create (and cache) the MCP client for the given credentials.
 
-    ``cache_key`` is derived from the connection settings so changing them
-    invalidates the cached client.
+    ``cache_key`` is hashed by Streamlit to key the cache; ``_creds`` is prefixed
+    with an underscore so Streamlit does not try to hash the (mutable) dict.
     """
-    params, missing = build_server_params()
-    if params is None:
-        raise RuntimeError(
-            "Missing required environment variables: " + ", ".join(missing)
-        )
-    return SnowflakeMCPClient(params)
+    return SnowflakeMCPClient(build_server_params(_creds))
 
 
-def connection_cache_key() -> str:
+def connection_cache_key(creds: dict) -> str:
     """A stable key that changes when connection-relevant settings change."""
+    pw_hash = hashlib.sha256(creds.get("password", "").encode()).hexdigest()[:12]
     parts = [
-        os.getenv("SNOWFLAKE_ACCOUNT", ""),
-        os.getenv("SNOWFLAKE_USER", ""),
-        os.getenv("SNOWFLAKE_WAREHOUSE", ""),
-        os.getenv("SNOWFLAKE_ROLE", ""),
-        os.getenv("SNOWFLAKE_DATABASE", ""),
-        os.getenv("SNOWFLAKE_SCHEMA", ""),
+        creds.get("account", ""),
+        creds.get("user", ""),
+        creds.get("warehouse", ""),
+        creds.get("role", ""),
+        creds.get("database", ""),
+        creds.get("schema", ""),
+        pw_hash,
         os.getenv("SNOWFLAKE_MCP_PACKAGE", "mcp_snowflake_server"),
     ]
     return "|".join(parts)
+
+
+def render_login() -> None:
+    """Render the Snowflake sign-in form. Stores creds in session on submit."""
+    st.title("❄️ Snowflake Data Explorer")
+    st.caption("Sign in to your Snowflake instance to start exploring your data.")
+
+    with st.form("login_form"):
+        st.subheader("Connect to Snowflake")
+        account = st.text_input(
+            "Account identifier",
+            value=os.getenv("SNOWFLAKE_ACCOUNT", ""),
+            help="e.g. `orgname-accountname` or `locator.region` "
+            "(from your Snowsight URL).",
+        )
+        col_u, col_p = st.columns(2)
+        with col_u:
+            user = st.text_input("User", value=os.getenv("SNOWFLAKE_USER", ""))
+        with col_p:
+            password = st.text_input("Password", type="password")
+
+        col_w, col_d = st.columns(2)
+        with col_w:
+            warehouse = st.text_input(
+                "Warehouse", value=os.getenv("SNOWFLAKE_WAREHOUSE", "")
+            )
+        with col_d:
+            database = st.text_input(
+                "Database", value=os.getenv("SNOWFLAKE_DATABASE", "")
+            )
+
+        col_r, col_s = st.columns(2)
+        with col_r:
+            role = st.text_input(
+                "Role (optional)", value=os.getenv("SNOWFLAKE_ROLE", "")
+            )
+        with col_s:
+            schema = st.text_input(
+                "Schema (optional)",
+                value=os.getenv("SNOWFLAKE_SCHEMA", ""),
+                placeholder=f"{DEFAULT_SCHEMA} (explore all schemas)",
+            )
+
+        submitted = st.form_submit_button("🔐 Connect", use_container_width=True)
+
+    if submitted:
+        fields = {
+            "Account": account,
+            "User": user,
+            "Password": password,
+            "Warehouse": warehouse,
+            "Database": database,
+        }
+        missing = [name for name, value in fields.items() if not value.strip()]
+        if missing:
+            st.error("Please fill in: " + ", ".join(missing))
+            return
+        st.session_state.sf_creds = {
+            "account": account.strip(),
+            "user": user.strip(),
+            "password": password,
+            "warehouse": warehouse.strip(),
+            "role": role.strip(),
+            "database": database.strip(),
+            "schema": schema.strip(),
+        }
+        st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -380,6 +425,14 @@ def step_recorder(store: list[dict]):
 # App
 # --------------------------------------------------------------------------- #
 st.set_page_config(page_title="Snowflake Data Explorer", page_icon="❄️", layout="wide")
+
+# --- Login gate ----------------------------------------------------------- #
+if "sf_creds" not in st.session_state:
+    render_login()
+    st.stop()
+
+creds = st.session_state.sf_creds
+
 st.title("❄️ Snowflake Data Explorer")
 st.caption("Chat with your Snowflake data through an MCP server.")
 
@@ -391,24 +444,22 @@ if "chat" not in st.session_state:
 # --- Sidebar: connection + tools ----------------------------------------- #
 with st.sidebar:
     st.header("Connection")
-    _, missing = build_server_params()
-    if missing:
-        st.error(
-            "Missing required settings:\n\n"
-            + "\n".join(f"- `{name}`" for name in missing)
-            + "\n\nAdd them to a `.env` file (see `.env.example`)."
-        )
-        st.stop()
-
-    st.write(f"**Account:** `{os.getenv('SNOWFLAKE_ACCOUNT')}`")
-    st.write(f"**User:** `{os.getenv('SNOWFLAKE_USER')}`")
-    st.write(f"**Warehouse:** `{os.getenv('SNOWFLAKE_WAREHOUSE')}`")
-    if os.getenv("SNOWFLAKE_DATABASE"):
-        st.write(f"**Database:** `{os.getenv('SNOWFLAKE_DATABASE')}`")
-    if os.getenv("SNOWFLAKE_SCHEMA"):
-        st.write(f"**Schema:** `{os.getenv('SNOWFLAKE_SCHEMA')}`")
+    st.write(f"**Account:** `{creds['account']}`")
+    st.write(f"**User:** `{creds['user']}`")
+    st.write(f"**Warehouse:** `{creds['warehouse']}`")
+    if creds.get("role"):
+        st.write(f"**Role:** `{creds['role']}`")
+    st.write(f"**Database:** `{creds['database']}`")
+    if creds.get("schema"):
+        st.write(f"**Schema:** `{creds['schema']}`")
     else:
         st.write(f"**Schema:** `{DEFAULT_SCHEMA}` (default — exploring all schemas)")
+
+    if st.button("🔓 Log out", use_container_width=True):
+        get_mcp_client.clear()  # drop cached connection(s)
+        for key in ("sf_creds", "openai_messages", "chat"):
+            st.session_state.pop(key, None)
+        st.rerun()
 
     model_options = list(
         dict.fromkeys(
@@ -424,7 +475,7 @@ with st.sidebar:
     )
 
     try:
-        mcp_client = get_mcp_client(connection_cache_key())
+        mcp_client = get_mcp_client(connection_cache_key(creds), creds)
         st.success(f"Connected · {len(mcp_client.tools)} tools available")
         with st.expander("Available MCP tools"):
             for tool in mcp_client.tools:
@@ -432,10 +483,12 @@ with st.sidebar:
     except Exception as exc:  # noqa: BLE001 - show connection errors in UI
         st.error(f"Could not connect to the Snowflake MCP server:\n\n{exc}")
         st.info(
-            "Make sure `uv` is installed and your Snowflake credentials are "
-            "correct. The first launch downloads the MCP server and may take a "
-            "minute."
+            "Check your Snowflake credentials and try again. Use **Log out** to "
+            "return to the sign-in screen. (The first launch also downloads the "
+            "MCP server via `uv`, which can take a minute.)"
         )
+        # Drop the failed cached client so the next attempt reconnects cleanly.
+        get_mcp_client.clear()
         st.stop()
 
     st.divider()
@@ -460,7 +513,7 @@ with st.sidebar:
 # --- Render existing conversation ----------------------------------------- #
 if not st.session_state.chat:
     with st.chat_message("assistant"):
-        st.markdown(welcome_message())
+        st.markdown(welcome_message(creds["database"]))
 
 for item in st.session_state.chat:
     with st.chat_message(item["role"]):

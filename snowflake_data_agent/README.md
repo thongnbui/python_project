@@ -53,17 +53,26 @@ python3 -m venv .venv
    `openai`, `mcp`, etc. (Note: a `.venv` is tied to its absolute path — if you
    move or rename the folder, recreate it with the commands above.)
 
-3. **Configure credentials.** Copy the example env file and fill it in:
+3. **Configure the OpenAI key.** Copy the example env file and fill it in:
 
 ```bash
 cp .env.example .env
 ```
 
-Required: `OPENAI_API_KEY`, `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`,
-`SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`.
-Optional: `SNOWFLAKE_SCHEMA` (leave unset to explore **all** schemas in the
-database — it defaults to `INFORMATION_SCHEMA` just to satisfy the connection),
-`SNOWFLAKE_ROLE`.
+The only **required** variable is `OPENAI_API_KEY` (the app's LLM key).
+
+**Snowflake credentials are entered on the app's login page**, not in `.env`.
+Any `SNOWFLAKE_*` values you do set in `.env` are used only to *pre-fill* the
+login form for convenience (handy for non-secret fields like
+`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`,
+`SNOWFLAKE_ROLE`). Leave `SNOWFLAKE_USER`/`SNOWFLAKE_PASSWORD` out to avoid
+storing secrets on disk.
+
+On the login screen you provide: **Account**, **User**, **Password**,
+**Warehouse**, **Database** (required), plus optional **Role** and **Schema**
+(leave Schema blank to explore **all** schemas — it defaults to
+`INFORMATION_SCHEMA` just to satisfy the connection). Use **Log out** in the
+sidebar to switch accounts.
 
 4. **Run the app** using the venv's Streamlit directly:
 
