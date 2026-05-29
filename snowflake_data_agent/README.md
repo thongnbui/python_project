@@ -23,14 +23,35 @@ it can be driven from Streamlit's synchronous, rerun-on-every-click model.
 
 ## Setup
 
-1. **Install `uv`** (used to launch the MCP server). See
-   <https://docs.astral.sh/uv/>. On macOS: `brew install uv`.
+> Run all commands from **inside** the `snowflake_data_agent/` folder:
+>
+> ```bash
+> cd snowflake_data_agent
+> ```
 
-2. **Install Python dependencies:**
+1. **Install `uv`** (used to launch the MCP server and, optionally, to create the
+   virtual environment). See <https://docs.astral.sh/uv/>. On macOS:
+   `brew install uv`.
+
+2. **Create a virtual environment and install dependencies.**
+
+   Using `uv` (fast, recommended):
 
 ```bash
-pip install -r requirements.txt
+uv venv .venv --python 3.12
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
+
+   Or using plain Python:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+   This creates a project-local `.venv/` folder containing its own `streamlit`,
+   `openai`, `mcp`, etc. (Note: a `.venv` is tied to its absolute path — if you
+   move or rename the folder, recreate it with the commands above.)
 
 3. **Configure credentials.** Copy the example env file and fill it in:
 
@@ -44,9 +65,16 @@ Optional: `SNOWFLAKE_SCHEMA` (leave unset to explore **all** schemas in the
 database — it defaults to `INFORMATION_SCHEMA` just to satisfy the connection),
 `SNOWFLAKE_ROLE`.
 
-4. **Run the app:**
+4. **Run the app** using the venv's Streamlit directly:
 
 ```bash
+.venv/bin/streamlit run app.py
+```
+
+   Or activate the venv first and run it by name:
+
+```bash
+source .venv/bin/activate
 streamlit run app.py
 ```
 
