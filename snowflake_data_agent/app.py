@@ -30,11 +30,9 @@ load_dotenv()
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MAX_AGENT_STEPS = 8
 
-# Token/size guardrails to stay under the OpenAI tokens-per-minute (TPM) limit.
-# Tool results are appended to the conversation and re-sent on every agent step,
-# so we cap each result and trim old turns to keep requests small.
-# Roughly 4 characters per token.
-MAX_TOOL_RESULT_CHARS = 6000  # ~1.5k tokens per tool result
+# Token/size guardrail to stay under the OpenAI tokens-per-minute (TPM) limit.
+# Tool results are passed back to the model in full; we only trim *older* turns
+# from the history to keep requests bounded. Roughly 4 characters per token.
 MAX_CONTEXT_CHARS = 48000  # ~12k tokens of history per request (well under 30k)
 
 # The MCP server requires *some* default schema to connect. When the user does
@@ -195,17 +193,6 @@ def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list
     return system + body[cut:]
 
 
-def _truncate(text: str, limit: int = MAX_TOOL_RESULT_CHARS) -> str:
-    """Truncate long tool output, keeping a marker so the model knows."""
-    if len(text) <= limit:
-        return text
-    head = text[:limit]
-    return (
-        f"{head}\n\n... [truncated {len(text) - limit} characters; "
-        "narrow the query with column selection or a smaller LIMIT for full data]"
-    )
-
-
 def run_agent(
     client: openai.OpenAI,
     mcp_client: SnowflakeMCPClient,
@@ -274,7 +261,7 @@ def run_agent(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": _truncate(result_text),
+                    "content": result_text,
                 }
             )
 
