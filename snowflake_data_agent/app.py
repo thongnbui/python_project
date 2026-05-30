@@ -41,6 +41,14 @@ MAX_CONTEXT_CHARS = 48000  # ~12k tokens of history per request (well under 30k)
 # agent is free to explore all schemas rather than being scoped to one.
 DEFAULT_SCHEMA = "INFORMATION_SCHEMA"
 
+# Open-Issue branding.
+OPENISSUE_LOGO_URL = "https://open-issue.com/wp-content/uploads/2025/07/logo.png"
+OPENISSUE_ICON_URL = (
+    "https://open-issue.com/wp-content/uploads/2026/02/cropped-oi-favi-192x192.png"
+)
+OPENISSUE_SITE_URL = "https://open-issue.com/"
+OPENISSUE_TAGLINE = "making sense of your data℠"
+
 SYSTEM_PROMPT = """\
 You are a senior Data Scientist working inside the user's Snowflake account. \
 Your job is not just to fetch rows on request — you proactively explore the \
@@ -195,8 +203,12 @@ def connection_cache_key(creds: dict) -> str:
 
 def render_login() -> None:
     """Render the Snowflake sign-in form. Stores creds in session on submit."""
+    st.image(OPENISSUE_LOGO_URL, width=260)
     st.title("❄️ Snowflake Data Explorer")
-    st.caption("Sign in to your Snowflake instance to start exploring your data.")
+    st.caption(
+        f"by [Open Issue]({OPENISSUE_SITE_URL}) — *{OPENISSUE_TAGLINE}*  \n"
+        "Sign in to your Snowflake instance to start exploring your data."
+    )
 
     with st.form("login_form"):
         st.subheader("Connect to Snowflake")
@@ -424,7 +436,22 @@ def step_recorder(store: list[dict]):
 # --------------------------------------------------------------------------- #
 # App
 # --------------------------------------------------------------------------- #
-st.set_page_config(page_title="Snowflake Data Explorer", page_icon="❄️", layout="wide")
+st.set_page_config(
+    page_title="Snowflake Data Explorer · Open Issue",
+    page_icon=OPENISSUE_ICON_URL,
+    layout="wide",
+)
+
+# App-wide logo (top-left of the app and at the top of the sidebar).
+try:
+    st.logo(
+        OPENISSUE_LOGO_URL,
+        size="large",
+        link=OPENISSUE_SITE_URL,
+        icon_image=OPENISSUE_ICON_URL,
+    )
+except Exception:  # noqa: BLE001 - st.logo is best-effort branding
+    pass
 
 # --- Login gate ----------------------------------------------------------- #
 if "sf_creds" not in st.session_state:
@@ -434,7 +461,10 @@ if "sf_creds" not in st.session_state:
 creds = st.session_state.sf_creds
 
 st.title("❄️ Snowflake Data Explorer")
-st.caption("Chat with your Snowflake data through an MCP server.")
+st.caption(
+    f"Chat with your Snowflake data through an MCP server · "
+    f"by [Open Issue]({OPENISSUE_SITE_URL}) — *{OPENISSUE_TAGLINE}*"
+)
 
 if "openai_messages" not in st.session_state:
     st.session_state.openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
