@@ -93,8 +93,9 @@ treat that DATABASE.SCHEMA as the ACTIVE CONTEXT for the rest of the \
 conversation. Interpret later references like "this schema", "the tables", \
 "that table", or a bare table name as belonging to the active database.schema — \
 until the user explicitly names a different database/schema, at which point you \
-switch the active context to that one. Briefly confirm the active schema when it \
-changes (e.g. "Working in STAGING.ANALYTICS").
+switch the active context to that one. When the active schema is set or changes, \
+FIRST call the `set_active_schema` tool (so the app tracks it deterministically), \
+then briefly confirm it (e.g. "Working in STAGING.ANALYTICS").
 - ALWAYS reference tables with FULLY-QUALIFIED three-part names \
 (DATABASE.SCHEMA.TABLE) built from the active context. Never use bare two-part \
 (SCHEMA.TABLE) names — they get mis-resolved against the connection's default \
@@ -176,6 +177,60 @@ special characters.
 insufficient privileges, suspended warehouse, type mismatch), and adjust — do \
 NOT repeatedly retry the same failing query.
 """
+
+
+def build_system_prompt(creds: dict, active: Optional[dict] = None) -> str:
+    """Append the current default + active database/schema to the system prompt.
+
+    ``active`` (when set, ``{"database":..., "schema":...}``) is the schema the
+    user has steered into during the conversation; it is re-injected every turn
+    so it is deterministic and survives history trimming. When ``active`` is not
+    set, the agent falls back to the login default below.
+    """
+    login_db = creds.get("database") or "(unknown)"
+    login_schema = creds.get("schema")
+
+    lines = [f"- Login default database: {login_db}"]
+    if login_schema:
+        lines.append(f"- Login default schema: {login_schema}")
+    else:
+        lines.append(
+            f"- Login default schema: none pinned (connection uses "
+            f"{DEFAULT_SCHEMA} for metadata only — not a data schema)."
+        )
+
+    if active and active.get("database") and active.get("schema"):
+        a_db, a_schema = active["database"], active["schema"]
+        lines.append(
+            f"- ACTIVE CONTEXT (set during this conversation): {a_db}.{a_schema}. "
+            f"When the user does NOT name a database/schema, operate here and "
+            f"fully-qualify tables as {a_db}.{a_schema}.TABLE."
+        )
+    elif login_schema:
+        lines.append(
+            f"- When the user does NOT name a database/schema, operate in the "
+            f"login default {login_db}.{login_schema} and fully-qualify tables as "
+            f"{login_db}.{login_schema}.TABLE."
+        )
+    else:
+        lines.append(
+            f"- When the user does NOT name a database/schema, stay within the "
+            f"{login_db} database; if a single schema is needed and none is "
+            f"named, list {login_db}'s schemas and pick/ask — do not query other "
+            f"databases unless asked."
+        )
+
+    lines.append(
+        "- Whenever the user names a (different) database/schema, FIRST call the "
+        "set_active_schema tool to update the active context, then proceed. "
+        "Keep using the active context for all later turns until it changes."
+    )
+
+    return (
+        SYSTEM_PROMPT
+        + "\n\nSESSION CONTEXT (current Snowflake login)\n"
+        + "\n".join(lines)
+    )
 
 
 def welcome_message(database: str) -> str:
@@ -385,6 +440,30 @@ def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list
     return system + body[cut:]
 
 
+# A client-side tool that lets the model set the conversation's active schema,
+# which is tracked deterministically in session state (not just in chat history).
+SET_ACTIVE_SCHEMA_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "set_active_schema",
+        "description": (
+            "Set the active database + schema context for the conversation. Call "
+            "this whenever the user names or switches to a database/schema, BEFORE "
+            "running queries against it. The active context persists across turns "
+            "until changed and is used to fully-qualify table names."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "database": {"type": "string", "description": "Database name."},
+                "schema": {"type": "string", "description": "Schema name."},
+            },
+            "required": ["database", "schema"],
+        },
+    },
+}
+
+
 # A client-side tool (not part of the MCP server) that lets the model render a
 # chart in the Streamlit UI. The model passes the data points to plot.
 DISPLAY_CHART_TOOL = {
@@ -511,15 +590,19 @@ def run_agent(
     model: str,
     messages: list[dict],
     on_step,
+    apply_active_schema=None,
 ) -> str:
     """Run the tool-calling loop until the model produces a final answer.
 
     ``messages`` is the full OpenAI message history (mutated in place).
     ``on_step`` is a callback taking a prebuilt ``step`` dict, used to render
     each tool call (or chart) in the UI.
+    ``apply_active_schema(database, schema) -> str`` updates the active-schema
+    state and returns a confirmation string (and is expected to update the
+    system message in ``messages`` in place).
     Returns the final assistant text.
     """
-    tools = mcp_client.openai_tools() + [DISPLAY_CHART_TOOL]
+    tools = mcp_client.openai_tools() + [SET_ACTIVE_SCHEMA_TOOL, DISPLAY_CHART_TOOL]
 
     for _ in range(MAX_AGENT_STEPS):
         response = client.chat.completions.create(
@@ -561,7 +644,16 @@ def run_agent(
             except json.JSONDecodeError:
                 arguments = {}
 
-            if name == "display_chart":
+            if name == "set_active_schema":
+                # Client-side tool: update the deterministic active-schema state.
+                db = arguments.get("database")
+                sc = arguments.get("schema")
+                if db and sc and apply_active_schema is not None:
+                    result_text = apply_active_schema(db, sc)
+                else:
+                    result_text = "Need both 'database' and 'schema' to set context."
+                on_step({"tool": "set_active_schema", "arguments": arguments})
+            elif name == "display_chart":
                 # Client-side tool: render a chart instead of calling the server.
                 point_count = len(arguments.get("data") or [])
                 on_step(
@@ -656,16 +748,16 @@ def render_step(step: dict) -> None:
             st.code(step.get("text", ""), language="json")
 
 
-def step_recorder(store: list[dict], show_tool_calls: bool = False):
-    """Build an ``on_step`` callback that records and live-renders prebuilt steps.
+def step_recorder(store: list[dict]):
+    """Build an ``on_step`` callback that records steps and live-renders charts.
 
-    Charts always render; raw MCP tool-call steps render only when
-    ``show_tool_calls`` is True (they are still recorded either way).
+    Steps are always recorded; only chart steps are rendered (raw MCP tool calls
+    stay hidden from the conversation).
     """
 
     def _on_step(step: dict[str, Any]):
         store.append(step)
-        if "chart" in step or show_tool_calls:
+        if "chart" in step:
             render_step(step)
 
     return _on_step
@@ -704,10 +796,30 @@ st.caption(
     f"by [Open Issue]({OPENISSUE_SITE_URL}) — *{OPENISSUE_TAGLINE}*"
 )
 
+if "active_schema" not in st.session_state:
+    st.session_state.active_schema = None  # {"database":..., "schema":...} or None
 if "openai_messages" not in st.session_state:
-    st.session_state.openai_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    st.session_state.openai_messages = [
+        {
+            "role": "system",
+            "content": build_system_prompt(creds, st.session_state.active_schema),
+        }
+    ]
 if "chat" not in st.session_state:
     st.session_state.chat = []  # Display items: {role, content, steps}
+
+
+def apply_active_schema(database: str, schema: str) -> str:
+    """Set the conversation's active schema and refresh the system message.
+
+    Updating the system message (index 0, kept by ``trim_messages``) makes the
+    active context deterministic and resilient to history trimming.
+    """
+    st.session_state.active_schema = {"database": database, "schema": schema}
+    st.session_state.openai_messages[0]["content"] = build_system_prompt(
+        creds, st.session_state.active_schema
+    )
+    return f"Active context set to {database}.{schema}."
 
 # --- Sidebar: connection + tools ----------------------------------------- #
 with st.sidebar:
@@ -723,9 +835,21 @@ with st.sidebar:
     else:
         st.write(f"**Schema:** `{DEFAULT_SCHEMA}` (default — exploring all schemas)")
 
+    active = st.session_state.active_schema
+    if active:
+        st.info(f"📌 Active context: `{active['database']}.{active['schema']}`")
+        if st.button("↩︎ Use session default", use_container_width=True):
+            st.session_state.active_schema = None
+            st.session_state.openai_messages[0]["content"] = build_system_prompt(
+                creds, None
+            )
+            st.rerun()
+    else:
+        st.caption("📌 Active context: session default")
+
     if st.button("🔓 Log out", use_container_width=True):
         get_mcp_client.clear()  # drop cached connection(s)
-        for key in ("sf_creds", "openai_messages", "chat"):
+        for key in ("sf_creds", "openai_messages", "chat", "active_schema"):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -744,10 +868,7 @@ with st.sidebar:
 
     try:
         mcp_client = get_mcp_client(connection_cache_key(creds), creds)
-        st.success(f"Connected · {len(mcp_client.tools)} tools available")
-        with st.expander("Available MCP tools"):
-            for tool in mcp_client.tools:
-                st.markdown(f"- **{tool.name}** — {tool.description}")
+        st.success("Connected to Snowflake")
     except Exception as exc:  # noqa: BLE001 - show connection errors in UI
         st.error(f"Could not connect to the Snowflake MCP server:\n\n{exc}")
         st.info(
@@ -760,15 +881,10 @@ with st.sidebar:
         st.stop()
 
     st.divider()
-    show_tool_calls = st.toggle(
-        "Show tool calls",
-        value=False,
-        help="Show the agent's underlying MCP tool calls (queries, table lists). "
-        "Charts and the final answer always show.",
-    )
     if st.button("🗑️ Clear conversation", use_container_width=True):
+        st.session_state.active_schema = None
         st.session_state.openai_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
+            {"role": "system", "content": build_system_prompt(creds, None)}
         ]
         st.session_state.chat = []
         st.rerun()
@@ -813,8 +929,8 @@ if not st.session_state.chat:
 for item in st.session_state.chat:
     with st.chat_message(item["role"]):
         for step in item.get("steps", []):
-            # Charts always render; raw MCP tool calls only when the user opts in.
-            if "chart" in step or show_tool_calls:
+            # Only charts are shown; raw MCP tool calls stay hidden.
+            if "chart" in step:
                 render_step(step)
         if item.get("content"):
             st.markdown(item["content"])
@@ -840,7 +956,8 @@ if prompt:
                     mcp_client=mcp_client,
                     model=model,
                     messages=st.session_state.openai_messages,
-                    on_step=step_recorder(steps, show_tool_calls),
+                    on_step=step_recorder(steps),
+                    apply_active_schema=apply_active_schema,
                 )
             st.markdown(answer)
         except openai.RateLimitError as exc:
