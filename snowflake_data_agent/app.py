@@ -34,10 +34,16 @@ DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # calls in parallel, so a thorough multi-stage exploration needs headroom.
 MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "18"))
 
-# Token/size guardrail to stay under the OpenAI tokens-per-minute (TPM) limit.
-# Tool results are passed back to the model in full; we only trim *older* turns
-# from the history to keep requests bounded. Roughly 4 characters per token.
-MAX_CONTEXT_CHARS = 48000  # ~12k tokens of history per request (well under 30k)
+# Token/size guardrails to keep requests under the model's context limit.
+# Roughly 4 characters per token.
+# - MAX_TOOL_RESULT_CHARS caps what each tool result contributes to the MODEL's
+#   context. The UI still renders the FULL result (from step["rows"]/["text"]),
+#   so this never reduces what you see — only what the model re-reads each step.
+# - MAX_CONTEXT_CHARS is the overall budget for the message history per request;
+#   trim_messages() enforces it by dropping old turns and, if needed, shrinking
+#   the oldest tool outputs within the current turn.
+MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "10000"))
+MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "120000"))  # ~30k tokens
 
 # The MCP server requires *some* default schema to connect. When the user does
 # not pin one, fall back to INFORMATION_SCHEMA (present in every database) so the
@@ -178,6 +184,14 @@ special characters.
 safe descriptive alias instead (e.g. ROW_COUNT, not ROWS) or double-quote it \
 ("ROWS"). Prefer clear non-reserved aliases like ROW_COUNT, NULL_COUNT, \
 DISTINCT_COUNT.
+- RESULT SERIALIZATION: the MCP server returns rows as JSON and CANNOT serialize \
+DATE/TIME/TIMESTAMP, VARIANT/OBJECT/ARRAY, or BINARY values — a query that \
+returns them fails with "Object of type Timestamp is not JSON serializable" and \
+no rows. So in the SELECT you return, CAST every temporal/semi-structured column \
+to text: TO_VARCHAR(col) or col::VARCHAR (e.g. TO_VARCHAR(MIN(ts)) AS MIN_TS, \
+TO_VARCHAR(DATE_TRUNC('day', ts)) AS DAY). Return only strings, numbers, and \
+booleans. (You may still use DATE/TIMESTAMP in WHERE/GROUP BY/ORDER BY — just \
+don't return the raw value in the SELECT list.)
 - Parsing text dates/timestamps/numbers — follow this sequence, do NOT skip step 1:
   1. SAMPLE FIRST. Before any conversion, look at real values: \
 SELECT DISTINCT col FROM <table> WHERE col IS NOT NULL LIMIT 10. Infer the exact \
@@ -299,28 +313,38 @@ def build_server_params(creds: dict) -> StdioServerParameters:
     # so the agent can explore every schema in the database freely.
     schema = creds.get("schema") or DEFAULT_SCHEMA
 
-    # The server's console script name. ``uvx`` will fetch it on first run.
-    command = os.getenv("SNOWFLAKE_MCP_COMMAND", "uvx")
+    command = os.getenv("SNOWFLAKE_MCP_COMMAND", "uv")
     package = os.getenv("SNOWFLAKE_MCP_PACKAGE", "mcp_snowflake_server")
 
+    # We launch the server through ``mcp_server_launcher.py`` instead of the
+    # package's console entry point. The launcher monkeypatches ``json.dumps``
+    # so the server can serialize Timestamps/dates/Decimals/bytes (a known
+    # upstream bug: "Object of type Timestamp is not JSON serializable").
+    launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "mcp_server_launcher.py")
+
     args: list[str] = []
-    # When launched with uvx, pin dependencies to work around a known
-    # pyOpenSSL/cryptography incompatibility (missing X509_V_FLAG_NOTIFY_POLICY).
-    # These ``--with`` flags must precede the package name.
-    if os.path.basename(command) == "uvx":
+    # ``uv run`` builds an ephemeral environment containing the package. The
+    # version pins work around a pyOpenSSL/cryptography incompatibility
+    # (missing X509_V_FLAG_NOTIFY_POLICY).
+    if os.path.basename(command) in ("uv", "uvx"):
+        args += ["run", "--no-project", "--with", package]
         pins = os.getenv("SNOWFLAKE_MCP_UV_WITH", "cryptography<44,setuptools<75")
         for spec in (s.strip() for s in pins.split(",")):
             if spec:
                 args += ["--with", spec]
+        args += ["python", launcher]
+    else:
+        # A custom command (e.g. a venv python) runs the launcher directly.
+        args += [launcher]
 
-    args += [package]
     args += ["--account", creds["account"], "--user", creds["user"]]
     args += ["--password", creds["password"], "--warehouse", creds["warehouse"]]
     if creds.get("role"):
         args += ["--role", creds["role"]]
     args += ["--database", creds["database"], "--schema", schema]
 
-    # Pass through the parent environment so ``uvx``/PATH resolve correctly.
+    # Pass through the parent environment so ``uv``/PATH resolve correctly.
     env = {k: v for k, v in os.environ.items()}
     return StdioServerParameters(command=command, args=args, env=env)
 
@@ -396,7 +420,7 @@ def render_login() -> None:
                 placeholder=f"{DEFAULT_SCHEMA} (explore all schemas)",
             )
 
-        submitted = st.form_submit_button("🔐 Connect", use_container_width=True)
+        submitted = st.form_submit_button("🔐 Connect", width="stretch")
 
     if submitted:
         fields = {
@@ -457,7 +481,30 @@ def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list
         total -= dropped
         cut = start
 
-    return system + body[cut:]
+    kept = system + body[cut:]
+
+    # Safety net: a single turn can still exceed the budget (many large tool
+    # results before any new user message). Shrink the OLDEST tool outputs —
+    # without removing messages — so tool_call/tool pairing stays intact. We
+    # leave the most recent messages untouched so the model sees fresh results.
+    if total > budget:
+        protected = 4
+        for i in range(max(0, len(kept) - protected)):
+            if total <= budget:
+                break
+            msg = kept[i]
+            content = msg.get("content") or ""
+            if msg.get("role") == "tool" and len(content) > 600:
+                shrunk = dict(msg)
+                shrunk["content"] = (
+                    content[:600]
+                    + "\n... [older tool result truncated to fit the context "
+                    "window] ..."
+                )
+                kept[i] = shrunk
+                total -= len(content) - len(shrunk["content"])
+
+    return kept
 
 
 # A client-side tool that lets the model set the conversation's active schema,
@@ -604,6 +651,22 @@ def build_chart(spec: dict) -> Optional[alt.Chart]:
         return None
 
 
+def _truncate_for_model(text: str, limit: int = MAX_TOOL_RESULT_CHARS) -> str:
+    """Cap a tool result's contribution to the MODEL's context.
+
+    The full result is still shown in the UI (rendered from step["rows"]/["text"]);
+    this only limits what is re-sent to the model on each agent step.
+    """
+    if text is None or len(text) <= limit:
+        return text
+    return (
+        text[:limit]
+        + f"\n... [result truncated to {limit} chars for the model; the full "
+        "result is shown in the app. Aggregate or add a smaller LIMIT if you need "
+        "more of it in-context]"
+    )
+
+
 def run_agent(
     client: openai.OpenAI,
     mcp_client: SnowflakeMCPClient,
@@ -709,7 +772,7 @@ def run_agent(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": result_text,
+                    "content": _truncate_for_model(result_text),
                 }
             )
 
@@ -733,13 +796,13 @@ def render_chart_step(step: dict) -> None:
     st.markdown(f"**📊 {title}**")
     chart = build_chart(spec)
     if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
     else:
         st.warning("Could not render the chart from the provided data.")
     data = spec.get("data") or []
     if data:
         with st.expander("Chart data", expanded=False):
-            st.dataframe(pd.DataFrame(data), use_container_width=True)
+            st.dataframe(pd.DataFrame(data), width="stretch")
 
 
 def render_step(step: dict) -> None:
@@ -762,7 +825,7 @@ def render_step(step: dict) -> None:
         rows = step.get("rows")
         if rows:
             st.caption(f"Result ({len(rows)} rows)")
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch")
         else:
             st.caption("Result")
             st.code(step.get("text", ""), language="json")
@@ -858,7 +921,7 @@ with st.sidebar:
     active = st.session_state.active_schema
     if active:
         st.info(f"📌 Active context: `{active['database']}.{active['schema']}`")
-        if st.button("↩︎ Use session default", use_container_width=True):
+        if st.button("↩︎ Use session default", width="stretch"):
             st.session_state.active_schema = None
             st.session_state.openai_messages[0]["content"] = build_system_prompt(
                 creds, None
@@ -867,7 +930,7 @@ with st.sidebar:
     else:
         st.caption("📌 Active context: session default")
 
-    if st.button("🔓 Log out", use_container_width=True):
+    if st.button("🔓 Log out", width="stretch"):
         get_mcp_client.clear()  # drop cached connection(s)
         for key in ("sf_creds", "openai_messages", "chat", "active_schema"):
             st.session_state.pop(key, None)
@@ -901,7 +964,7 @@ with st.sidebar:
         st.stop()
 
     st.divider()
-    if st.button("🗑️ Clear conversation", use_container_width=True):
+    if st.button("🗑️ Clear conversation", width="stretch"):
         st.session_state.active_schema = None
         st.session_state.openai_messages = [
             {"role": "system", "content": build_system_prompt(creds, None)}
@@ -938,7 +1001,7 @@ with st.sidebar:
     }
     quick_choice = None
     for label, prompt in quick_prompts.items():
-        if st.button(label, use_container_width=True):
+        if st.button(label, width="stretch"):
             quick_choice = prompt
 
 # --- Render existing conversation ----------------------------------------- #
