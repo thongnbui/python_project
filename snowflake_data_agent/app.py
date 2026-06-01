@@ -184,6 +184,36 @@ special characters.
 safe descriptive alias instead (e.g. ROW_COUNT, not ROWS) or double-quote it \
 ("ROWS"). Prefer clear non-reserved aliases like ROW_COUNT, NULL_COUNT, \
 DISTINCT_COUNT.
+- STATIC SQL ONLY — NO DYNAMIC IDENTIFIERS. You write one static query at a \
+time; you cannot build identifiers from strings. NEVER concatenate a column or \
+table name into SQL (e.g. t."' || COLUMN_NAME || '" or 'SELECT ' || col) — \
+Snowflake parses that text literally and fails with "invalid identifier". To \
+reference a column you MUST write its literal name in the query text. You also \
+cannot loop/iterate inside SQL. If you need column names, get them first \
+(describe_table or INFORMATION_SCHEMA.COLUMNS), then write a query with those \
+names spelled out explicitly.
+- DON'T GUESS METADATA VIEWS/COLUMNS — VERIFY. Use the correct sources: table \
+sizes/row counts come from INFORMATION_SCHEMA.TABLES (columns ROW_COUNT, BYTES, \
+TABLE_TYPE); columns from INFORMATION_SCHEMA.COLUMNS. Do not invent views like \
+TABLE_STORAGE_METRICS or assume a column exists. If you are unsure of a view's \
+columns, inspect it first (SELECT * FROM <db>.INFORMATION_SCHEMA.<view> LIMIT 1). \
+An "invalid identifier" error means the column/view NAME is wrong — inspect and \
+correct it; do not retry the same query.
+- NEVER reference a column you have not confirmed exists. Column names are NOT \
+predictable from naming patterns — do not assume a table has ID, NAME, CREATED_AT, \
+MI_ID, etc. BEFORE writing any query that names specific columns of a table, get \
+its real columns via describe_table('db.schema.table') (or SELECT COLUMN_NAME FROM \
+db.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=... AND TABLE_NAME=...). Use ONLY \
+the exact names it returns. An "invalid identifier '<COL>'" error means you used a \
+name that isn't in the table — re-describe it and correct, never retry blindly.
+- PROFILE ONE TABLE PER QUERY with explicit columns. AFTER confirming the column \
+list (above), write literal per-column aggregates for that table, e.g.: \
+SELECT COUNT(*) AS ROW_COUNT, \
+COUNT_IF("ColA" IS NULL) AS COLA_NULLS, COUNT(DISTINCT "ColA") AS COLA_DISTINCT, \
+COUNT_IF("ColB" IS NULL) AS COLB_NULLS, COUNT(DISTINCT "ColB") AS COLB_DISTINCT \
+FROM DB.SCHEMA.TABLE. Do NOT try to profile many tables and many columns in one \
+giant UNION/CASE query — issue separate per-table queries (in parallel tool \
+calls when possible) instead.
 - RESULT SERIALIZATION: the MCP server returns rows as JSON and CANNOT serialize \
 DATE/TIME/TIMESTAMP, VARIANT/OBJECT/ARRAY, or BINARY values — a query that \
 returns them fails with "Object of type Timestamp is not JSON serializable" and \
@@ -305,9 +335,10 @@ What would you like to explore? 🔬"""
 def build_server_params(creds: dict) -> StdioServerParameters:
     """Build MCP server launch parameters from a credentials dict.
 
-    ``creds`` is expected to contain ``account``, ``user``, ``password`` and
-    ``warehouse`` and ``database`` (validated by the login form), plus optional
-    ``role`` and ``schema``.
+    ``creds`` is expected to contain ``account``, ``user``, ``warehouse`` and
+    ``database`` (validated by the login form), plus optional auth fields.
+    Key-pair auth uses ``authenticator=snowflake_jwt`` and a private key file;
+    Snowflake stores the matching public key on the user as ``RSA_PUBLIC_KEY``.
     """
     # SNOWFLAKE schema is optional: when omitted we default to INFORMATION_SCHEMA
     # so the agent can explore every schema in the database freely.
@@ -339,10 +370,35 @@ def build_server_params(creds: dict) -> StdioServerParameters:
         args += [launcher]
 
     args += ["--account", creds["account"], "--user", creds["user"]]
-    args += ["--password", creds["password"], "--warehouse", creds["warehouse"]]
+    args += ["--warehouse", creds["warehouse"]]
     if creds.get("role"):
         args += ["--role", creds["role"]]
     args += ["--database", creds["database"], "--schema", schema]
+
+    # --- Key-pair authentication (handled by the Snowflake connector) --- #
+    # The MCP server forwards any extra ``--key value`` pairs straight to
+    # snowflake.connector, so we can use JWT auth without modifying the server.
+    # Snowflake stores the matching RSA_PUBLIC_KEY on the user.
+    args += ["--authenticator", "snowflake_jwt"]
+    private_key_file = (
+        creds.get("private_key_file")
+        or os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE")
+        or os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH")
+    )
+    if private_key_file:
+        args += ["--private_key_file", private_key_file]
+    pk_passphrase = creds.get("private_key_pwd") or os.getenv(
+        "SNOWFLAKE_PRIVATE_KEY_PWD"
+    )
+    if pk_passphrase:
+        args += ["--private_key_file_pwd", pk_passphrase]
+
+    # Escape hatch: arbitrary connector params as "key=value,key2=value2".
+    extra = os.getenv("SNOWFLAKE_CONNECT_EXTRA", "")
+    for pair in (p.strip() for p in extra.split(",")):
+        if pair and "=" in pair:
+            key, value = pair.split("=", 1)
+            args += [f"--{key.strip()}", value.strip()]
 
     # Pass through the parent environment so ``uv``/PATH resolve correctly.
     env = {k: v for k, v in os.environ.items()}
@@ -361,7 +417,9 @@ def get_mcp_client(cache_key: str, _creds: dict) -> SnowflakeMCPClient:
 
 def connection_cache_key(creds: dict) -> str:
     """A stable key that changes when connection-relevant settings change."""
-    pw_hash = hashlib.sha256(creds.get("password", "").encode()).hexdigest()[:12]
+    key_hash = hashlib.sha256(
+        (creds.get("private_key_file", "") + creds.get("private_key_pwd", "")).encode()
+    ).hexdigest()[:12]
     parts = [
         creds.get("account", ""),
         creds.get("user", ""),
@@ -369,7 +427,7 @@ def connection_cache_key(creds: dict) -> str:
         creds.get("role", ""),
         creds.get("database", ""),
         creds.get("schema", ""),
-        pw_hash,
+        key_hash,
         os.getenv("SNOWFLAKE_MCP_PACKAGE", "mcp_snowflake_server"),
     ]
     return "|".join(parts)
@@ -392,11 +450,7 @@ def render_login() -> None:
             help="e.g. `orgname-accountname` or `locator.region` "
             "(from your Snowsight URL).",
         )
-        col_u, col_p = st.columns(2)
-        with col_u:
-            user = st.text_input("User", value=os.getenv("SNOWFLAKE_USER", ""))
-        with col_p:
-            password = st.text_input("Password", type="password")
+        user = st.text_input("User", value=os.getenv("SNOWFLAKE_USER", ""))
 
         col_w, col_d = st.columns(2)
         with col_w:
@@ -420,15 +474,37 @@ def render_login() -> None:
                 placeholder=f"{DEFAULT_SCHEMA} (explore all schemas)",
             )
 
+        with st.expander("Key-pair authentication"):
+            st.caption(
+                "The app uses Snowflake key-pair auth (`snowflake_jwt`). "
+                "Register the matching public key on the Snowflake user as "
+                "`RSA_PUBLIC_KEY`, then provide the private `.p8` file here."
+            )
+            private_key_file = st.text_input(
+                "Private key file",
+                value=os.getenv(
+                    "SNOWFLAKE_PRIVATE_KEY_FILE",
+                    os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH", ""),
+                ),
+                placeholder="/Users/thongbui/.snowflake/rsa_key.p8",
+                help="Snowflake stores the matching RSA_PUBLIC_KEY on the user; "
+                "the app authenticates with this private key file.",
+            )
+            private_key_pwd = st.text_input(
+                "Private key passphrase (optional)",
+                type="password",
+                value=os.getenv("SNOWFLAKE_PRIVATE_KEY_PWD", ""),
+            )
+
         submitted = st.form_submit_button("🔐 Connect", width="stretch")
 
     if submitted:
         fields = {
             "Account": account,
             "User": user,
-            "Password": password,
             "Warehouse": warehouse,
             "Database": database,
+            "Private key file": private_key_file,
         }
         missing = [name for name, value in fields.items() if not value.strip()]
         if missing:
@@ -437,11 +513,12 @@ def render_login() -> None:
         st.session_state.sf_creds = {
             "account": account.strip(),
             "user": user.strip(),
-            "password": password,
             "warehouse": warehouse.strip(),
             "role": role.strip(),
             "database": database.strip(),
             "schema": schema.strip(),
+            "private_key_file": private_key_file.strip(),
+            "private_key_pwd": private_key_pwd,
         }
         st.rerun()
 
@@ -872,6 +949,12 @@ if "sf_creds" not in st.session_state:
     st.stop()
 
 creds = st.session_state.sf_creds
+if not creds.get("private_key_file"):
+    st.warning("Please reconnect with a Snowflake private key file.")
+    for key in ("sf_creds", "openai_messages", "chat", "active_schema"):
+        st.session_state.pop(key, None)
+    render_login()
+    st.stop()
 
 st.title("❄️ Snowflake Data Explorer")
 st.caption(

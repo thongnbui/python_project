@@ -61,18 +61,43 @@ cp .env.example .env
 
 The only **required** variable is `OPENAI_API_KEY` (the app's LLM key).
 
-**Snowflake credentials are entered on the app's login page**, not in `.env`.
-Any `SNOWFLAKE_*` values you do set in `.env` are used only to *pre-fill* the
-login form for convenience (handy for non-secret fields like
-`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`,
-`SNOWFLAKE_ROLE`). Leave `SNOWFLAKE_USER`/`SNOWFLAKE_PASSWORD` out to avoid
-storing secrets on disk.
+**Snowflake connection values are entered on the app's login page**, not in
+`.env`. Any `SNOWFLAKE_*` values you do set in `.env` are used only to
+*pre-fill* the login form for convenience.
 
-On the login screen you provide: **Account**, **User**, **Password**,
-**Warehouse**, **Database** (required), plus optional **Role** and **Schema**
-(leave Schema blank to explore **all** schemas — it defaults to
-`INFORMATION_SCHEMA` just to satisfy the connection). Use **Log out** in the
-sidebar to switch accounts.
+The app uses **Snowflake key-pair authentication** (`snowflake_jwt`), so you do
+not enter a Snowflake password. Snowflake stores the public key on the user, and
+the app authenticates with the matching private `.p8` file.
+
+Generate a private/public key pair:
+
+```bash
+mkdir -p ~/.snowflake
+openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out ~/.snowflake/rsa_key.p8 -nocrypt
+openssl rsa -in ~/.snowflake/rsa_key.p8 -pubout -out ~/.snowflake/rsa_key.pub
+```
+
+Register the public key on your Snowflake user (paste the body of
+`rsa_key.pub`, without the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----`
+lines):
+
+```sql
+ALTER USER <your_user> SET RSA_PUBLIC_KEY='MIIBIjANBgkq...';
+```
+
+Then either enter the private key path in the login form or pre-fill it in
+`.env`:
+
+```bash
+SNOWFLAKE_PRIVATE_KEY_FILE="/Users/you/.snowflake/rsa_key.p8"
+# SNOWFLAKE_PRIVATE_KEY_PWD="optional_private_key_passphrase"
+```
+
+On the login screen you provide: **Account**, **User**, **Private key file**,
+**Warehouse**, **Database** (required), plus optional **Role**, **Schema**, and
+private-key passphrase. Leave Schema blank to explore **all** schemas; it
+defaults to `INFORMATION_SCHEMA` just to satisfy the connection. Use **Log out**
+in the sidebar to switch accounts.
 
 4. **Run the app** using the venv's Streamlit directly:
 
@@ -87,7 +112,7 @@ source .venv/bin/activate
 streamlit run app.py
 ```
 
-The first launch downloads the MCP server via `uvx`, which can take a minute.
+The first launch downloads the MCP server via `uv run`, which can take a minute.
 
 ## Try asking
 
