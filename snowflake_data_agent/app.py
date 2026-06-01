@@ -214,6 +214,11 @@ COUNT_IF("ColB" IS NULL) AS COLB_NULLS, COUNT(DISTINCT "ColB") AS COLB_DISTINCT 
 FROM DB.SCHEMA.TABLE. Do NOT try to profile many tables and many columns in one \
 giant UNION/CASE query — issue separate per-table queries (in parallel tool \
 calls when possible) instead.
+- Boolean profiling in Snowflake: do NOT write `col IS TRUE` or `col IS FALSE` \
+inside COUNT_IF; Snowflake can reject that syntax. Use equality for boolean \
+values and IS NULL only for nulls: COUNT_IF(col = TRUE) AS COL_TRUE, \
+COUNT_IF(col = FALSE) AS COL_FALSE, COUNT_IF(col IS NULL) AS COL_NULLS. If the \
+column name is case-sensitive or special, quote it: COUNT_IF("IS_MANAGER" = TRUE).
 - RESULT SERIALIZATION: the MCP server returns rows as JSON and CANNOT serialize \
 DATE/TIME/TIMESTAMP, VARIANT/OBJECT/ARRAY, or BINARY values — a query that \
 returns them fails with "Object of type Timestamp is not JSON serializable" and \
@@ -908,6 +913,19 @@ def render_step(step: dict) -> None:
             st.code(step.get("text", ""), language="json")
 
 
+def render_response_copy(content: str) -> None:
+    """Render a copyable Markdown version of a response."""
+    with st.expander("Copy response"):
+        st.caption("Use the copy button in the code block below.")
+        st.code(content, language="markdown")
+
+
+def render_assistant_response(content: str) -> None:
+    """Render assistant text with an easy copy affordance."""
+    st.markdown(content)
+    render_response_copy(content)
+
+
 def step_recorder(store: list[dict]):
     """Build an ``on_step`` callback that records steps and live-renders charts.
 
@@ -1090,7 +1108,7 @@ with st.sidebar:
 # --- Render existing conversation ----------------------------------------- #
 if not st.session_state.chat:
     with st.chat_message("assistant"):
-        st.markdown(welcome_message(creds["database"]))
+        render_assistant_response(welcome_message(creds["database"]))
 
 for item in st.session_state.chat:
     with st.chat_message(item["role"]):
@@ -1099,7 +1117,10 @@ for item in st.session_state.chat:
             if "chart" in step:
                 render_step(step)
         if item.get("content"):
-            st.markdown(item["content"])
+            if item["role"] == "assistant":
+                render_assistant_response(item["content"])
+            else:
+                st.markdown(item["content"])
 
 # --- Handle new input ------------------------------------------------------ #
 user_input = st.chat_input("Ask about your Snowflake data...")
@@ -1125,7 +1146,7 @@ if prompt:
                     on_step=step_recorder(steps),
                     apply_active_schema=apply_active_schema,
                 )
-            st.markdown(answer)
+            render_assistant_response(answer)
         except openai.RateLimitError as exc:
             answer = (
                 "⚠️ OpenAI rate limit hit. Your org's tokens-per-minute (TPM) "
@@ -1134,9 +1155,11 @@ if prompt:
                 f"and retry.\n\n```\n{exc}\n```"
             )
             st.warning(answer)
+            render_response_copy(answer)
         except Exception as exc:  # noqa: BLE001 - keep the app alive on any error
             answer = f"⚠️ Something went wrong while answering:\n\n```\n{exc}\n```"
             st.error(answer)
+            render_response_copy(answer)
 
     st.session_state.chat.append(
         {"role": "assistant", "content": answer, "steps": steps}
