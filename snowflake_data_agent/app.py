@@ -173,6 +173,11 @@ metadata queries need no LIMIT.
 has a default database/schema, but you may explore ALL schemas in the database.
 - Quote identifiers with double quotes when they are case-sensitive or contain \
 special characters.
+- Do NOT use Snowflake reserved keywords as column aliases or identifiers \
+(e.g. ROWS, VALUES, ORDER, GROUP, TABLE, CURRENT, LOCALTIME, NUMBER). Pick a \
+safe descriptive alias instead (e.g. ROW_COUNT, not ROWS) or double-quote it \
+("ROWS"). Prefer clear non-reserved aliases like ROW_COUNT, NULL_COUNT, \
+DISTINCT_COUNT.
 - If a query errors, read the message, explain the likely cause (wrong object, \
 insufficient privileges, suspended warehouse, type mismatch), and adjust — do \
 NOT repeatedly retry the same failing query.
