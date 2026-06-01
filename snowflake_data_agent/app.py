@@ -250,7 +250,7 @@ def build_server_params(creds: dict) -> StdioServerParameters:
     return StdioServerParameters(command=command, args=args, env=env)
 
 
-@st.cache_resource(show_spinner="Connecting to Snowflake via MCP...")
+@st.cache_resource(show_spinner="Connecting to Snowflake...")
 def get_mcp_client(cache_key: str, _creds: dict) -> SnowflakeMCPClient:
     """Create (and cache) the MCP client for the given credentials.
 
