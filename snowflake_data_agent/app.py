@@ -18,6 +18,7 @@ import json
 import os
 from typing import Any, Optional
 
+import altair as alt
 import openai
 import pandas as pd
 import streamlit as st
@@ -29,7 +30,9 @@ from mcp_client import SnowflakeMCPClient
 load_dotenv()
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-MAX_AGENT_STEPS = 8
+# Max model<->tool round-trips per user turn. Each round can issue several tool
+# calls in parallel, so a thorough multi-stage exploration needs headroom.
+MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "18"))
 
 # Token/size guardrail to stay under the OpenAI tokens-per-minute (TPM) limit.
 # Tool results are passed back to the model in full; we only trim *older* turns
@@ -50,58 +53,107 @@ OPENISSUE_SITE_URL = "https://open-issue.com/"
 OPENISSUE_TAGLINE = "making sense of your data℠"
 
 SYSTEM_PROMPT = """\
-You are a senior Data Scientist working inside the user's Snowflake account. \
-Your job is not just to fetch rows on request — you proactively explore the \
-data, surface what is interesting, and call out anomalies the user may not have \
-thought to ask about. Think like an analyst doing exploratory data analysis \
-(EDA): profile the data, form hypotheses, and verify them with queries.
+You are a world-class Data Scientist embedded in the user's Snowflake account — \
+the kind who can be dropped into an unfamiliar schema and, within minutes, \
+explain what the data is, how trustworthy it is, and what is genuinely \
+interesting about it. You are rigorous, methodical, hypothesis-driven, and \
+proactive: you anticipate the next question instead of waiting to be asked.
 
-You have tools to:
-- list databases, schemas, and tables,
-- describe a table's columns and types,
-- run read-only SELECT queries.
+TOOLS
+- list_databases, list_schemas, list_tables — inventory the account.
+- describe_table — column names, types, and structure.
+- read_query — run read-only SELECTs; this is your primary instrument.
+- display_chart — visualize results in the UI.
 
-Exploration workflow:
-- To explore broadly, start by listing databases, then schemas, then tables.
-- The connection has a default database/schema, but it is only a starting \
-context. When the user wants to "explore everything", enumerate ALL schemas in \
-the database with list_schemas and inspect tables across them — do not limit \
-yourself to the default schema.
-- Before querying an unfamiliar table, describe it to learn its columns, types, \
-and likely grain (what one row represents).
-- Profile tables before drawing conclusions: row counts, distinct counts, \
-NULL/blank rates, min/max/avg for numerics, date ranges for timestamps, top \
-categories for low-cardinality columns. Use SQL aggregates \
-(COUNT, COUNT(DISTINCT ...), MIN, MAX, AVG, STDDEV, APPROX_PERCENTILE, \
-GROUP BY) rather than pulling raw rows when profiling.
+OPERATING PRINCIPLES
+- Be autonomous. When asked to explore a schema or table, carry out the full \
+methodology below end-to-end WITHOUT pausing to ask permission for each step. \
+Only ask the user when genuinely blocked (ambiguous target, missing access, or \
+a destructive request).
+- Be hypothesis-driven. State a hypothesis, test it with SQL, and report whether \
+it held. Treat every surprise as a lead worth chasing.
+- Be efficient with queries, compute, and context. Each query costs money and \
+tokens, so:
+  * Prefer Snowflake metadata views (INFORMATION_SCHEMA.TABLES, .COLUMNS, \
+.TABLE_STORAGE_METRICS) to learn structure, row counts, and sizes WITHOUT \
+scanning data.
+  * Profile MANY columns in ONE query using conditional aggregates — e.g. \
+COUNT(col), COUNT(DISTINCT col), MIN, MAX, AVG, STDDEV, \
+SUM(IFF(col IS NULL,1,0)) — rather than one query per column.
+  * Issue independent queries in PARALLEL (multiple tool calls in a single turn).
+  * On large tables, use approximate functions (APPROX_COUNT_DISTINCT, \
+APPROX_PERCENTILE, HLL) and TABLESAMPLE/SAMPLE to estimate fast — and say when a \
+number is approximate.
+  * Never SELECT * on wide or large tables when profiling; select only what you need.
 
-What to look for (anomalies & insights):
-- Data quality issues: unexpected NULL rates, empty strings, duplicate keys, \
-constant or near-constant columns, mixed formats, encoding/casing \
-inconsistencies.
-- Outliers and extremes: values far outside typical ranges, negative values \
-where only positives make sense, impossible dates (future timestamps, epoch-0), \
-suspicious spikes or drops over time.
-- Distribution surprises: heavy skew, unexpected gaps, bimodality, dominant \
-categories, referential mismatches between related tables.
-- Trends and relationships: growth/decline over time, seasonality, correlations \
-worth flagging. State these as hypotheses and verify with a follow-up query.
+EXPLORATION METHODOLOGY (adapt intelligently; you don't have to do every step)
+1. Orient. Inventory schemas/tables. Use INFORMATION_SCHEMA to get row counts, \
+table type (TABLE/VIEW), created/last_altered, and bytes. Tackle the biggest and \
+most central tables first.
+2. Understand structure. describe_table, then infer the GRAIN (what one row \
+represents), candidate primary keys, and likely foreign keys (by naming/typing). \
+Sketch how tables relate.
+3. Profile columns, type-aware:
+   * Numeric — count, nulls, min/max, avg, stddev, percentiles \
+(p01/p25/p50/p75/p99), zeros and negatives.
+   * Categorical/low-cardinality — distinct count, top-N values with frequency \
+and % share, blanks.
+   * Temporal — min/max, range, recency, counts per period, gaps.
+   * Text/high-cardinality — length distribution, sample distinct values, format \
+consistency.
+   * Boolean/flags — true/false balance.
+4. Assess data quality. Quantify: null/blank rates, duplicate keys \
+(GROUP BY key HAVING COUNT(*) > 1), constant/near-constant columns, mixed \
+formats/casing, impossible values (negative amounts, future timestamps, \
+epoch-0/1970 dates), and referential-integrity gaps between related tables.
+5. Find outliers & distributions. Flag values beyond the IQR fences \
+(Q1 - 1.5*IQR, Q3 + 1.5*IQR) or |z| > 3; note skew, bimodality, dominant \
+categories, and long tails.
+6. Cross-table & relationships. Verify join keys, check cardinality/fan-out, \
+find orphans/mismatches, and surface meaningful joins.
+7. Trends, segments & correlations. Time series (growth, seasonality, \
+spikes/drops), segment comparisons, and relationships between variables \
+(CORR, ratios). Correlation is not causation — say so.
+8. Synthesize. Pull it together: what the data is, how trustworthy it is, and \
+the most interesting/actionable findings.
 
-Reporting style:
-- Lead with the headline insight or anomaly, then show the supporting evidence \
-(a small table or aggregate). Quantify findings ("12% of orders have NULL \
-region", not "some orders").
-- Clearly separate what the data SHOWS from what you INFER. Note caveats and \
-suggest the next query worth running.
-- Keep prose concise and skimmable; prefer bullet points and small result sets.
+ANALYTICAL RIGOR
+- Define thresholds explicitly (e.g. "outlier = |z| > 3", "near-constant = one \
+value in >99% of rows"). Quantify everything with counts AND percentages — never \
+vague words like "some" or "a lot".
+- Distinguish clearly what the data SHOWS from what you INFER; note assumptions, \
+sample sizes, and approximation caveats.
+- Sanity-check every number against the table's total row count.
 
-Safety & mechanics:
-- ALWAYS add a LIMIT (default 100) to exploratory row-level SELECTs so you never \
-pull huge result sets; aggregates can omit LIMIT when naturally bounded.
-- Only issue read-only SELECT statements. Never attempt INSERT/UPDATE/DELETE/DDL.
-- Qualify object names as DATABASE.SCHEMA.TABLE when the context is ambiguous.
-- If a tool returns an error, explain it and suggest how to fix it (e.g. wrong \
-database/schema, missing privileges, warehouse not running).
+VISUALIZING RESULTS
+- Proactively visualize when a chart conveys a finding better than text \
+(distributions, top-N, trends, composition) and whenever the user asks.
+- Workflow: aggregate with read_query (keep it small), then call display_chart \
+with the rows as `data`, the right `chart_type`, `x`, `y`, and a clear `title`. \
+Bar = category/top-N comparison; line/area = trend over time; scatter = \
+relationship; pie = parts-of-a-whole with few categories. Describe the chart in text.
+
+REPORTING STYLE
+- Open with a 1-3 sentence executive summary, then list findings ranked by \
+importance/severity (use 🔴 high, 🟡 medium, 🟢 minor/FYI).
+- For each finding give: what it is, the evidence (a number, small table, or \
+chart), why it matters ("so what"), and a suggested next step.
+- Be concise and skimmable — bullets, small result sets, bold the key numbers. \
+Close with "Recommended next steps" or open questions worth pursuing.
+
+SAFETY & MECHANICS
+- READ-ONLY. Only run SELECT / SHOW / DESCRIBE-style queries. NEVER \
+INSERT/UPDATE/DELETE/MERGE/CREATE/DROP/ALTER or anything that mutates data or \
+schema.
+- Add LIMIT (default 100) to row-level previews; naturally bounded aggregate or \
+metadata queries need no LIMIT.
+- Qualify object names as DATABASE.SCHEMA.TABLE when ambiguous. The connection \
+has a default database/schema, but you may explore ALL schemas in the database.
+- Quote identifiers with double quotes when they are case-sensitive or contain \
+special characters.
+- If a query errors, read the message, explain the likely cause (wrong object, \
+insufficient privileges, suspended warehouse, type mismatch), and adjust — do \
+NOT repeatedly retry the same failing query.
 """
 
 
@@ -123,6 +175,8 @@ and category breakdowns.
 issues, and surprising distributions.
 - 📈 **Find insights** — trends over time, relationships between tables, and \
 patterns worth a closer look.
+- 📊 **Visualize data** — bar, line, area, scatter, and pie charts, right in \
+the chat.
 - 💬 **Answer questions** in plain English with read-only `SELECT` queries (I \
 never modify your data).
 
@@ -130,7 +184,7 @@ never modify your data).
 - *"What's in this database? Give me the lay of the land."*
 - *"Profile the largest table and flag anything that looks off."*
 - *"Find data-quality issues or anomalies across the schemas."*
-- *"Which tables have grown the most recently?"*
+- *"Show me a pie chart of records by category in <table>."*
 
 What would you like to explore? 🔬"""
 
@@ -310,6 +364,126 @@ def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list
     return system + body[cut:]
 
 
+# A client-side tool (not part of the MCP server) that lets the model render a
+# chart in the Streamlit UI. The model passes the data points to plot.
+DISPLAY_CHART_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "display_chart",
+        "description": (
+            "Render a chart in the app UI for the user. Call this whenever the "
+            "user asks for a chart, graph, plot, pie, or visualization. Provide "
+            "the actual data points to plot (typically taken from a prior "
+            "read_query result), already aggregated/summarized — keep it small "
+            "(ideally < 50 points). After charting, still summarize the chart in "
+            "your text answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["bar", "line", "area", "scatter", "pie"],
+                    "description": "The type of chart to render.",
+                },
+                "title": {"type": "string", "description": "Chart title."},
+                "data": {
+                    "type": "array",
+                    "items": {"type": "object", "additionalProperties": True},
+                    "description": (
+                        "Rows to plot; each row is an object of column -> value."
+                    ),
+                },
+                "x": {
+                    "type": "string",
+                    "description": (
+                        "Field for the x-axis (or the category/label field for a "
+                        "pie chart)."
+                    ),
+                },
+                "y": {
+                    "type": "string",
+                    "description": (
+                        "Numeric field for the y-axis (or the slice-size field "
+                        "for a pie chart)."
+                    ),
+                },
+                "color": {
+                    "type": "string",
+                    "description": "Optional field used to group/color series.",
+                },
+            },
+            "required": ["chart_type", "data", "x", "y"],
+        },
+    },
+}
+
+
+def build_chart(spec: dict) -> Optional[alt.Chart]:
+    """Build an Altair chart from a ``display_chart`` spec. Returns None on failure."""
+    try:
+        data = spec.get("data") or []
+        df = pd.DataFrame(data)
+        if df.empty:
+            return None
+
+        ctype = (spec.get("chart_type") or "bar").lower()
+        x = spec.get("x")
+        y = spec.get("y")
+        color = spec.get("color")
+        title = spec.get("title") or ""
+
+        # Coerce the y field to numeric when the values look numeric.
+        if y in df.columns:
+            coerced = pd.to_numeric(df[y], errors="coerce")
+            if coerced.notna().any():
+                df[y] = coerced
+
+        base = alt.Chart(df).properties(title=title, height=380)
+        tooltip = list(df.columns)
+        color_enc = (
+            {"color": alt.Color(f"{color}:N")}
+            if color and color in df.columns
+            else {}
+        )
+
+        if ctype == "pie":
+            category = x or color
+            if not (category and y):
+                return None
+            return base.mark_arc().encode(
+                theta=alt.Theta(f"{y}:Q"),
+                color=alt.Color(f"{category}:N"),
+                tooltip=tooltip,
+            )
+
+        if not (x and y):
+            return None
+        if ctype == "bar":
+            return base.mark_bar().encode(
+                x=alt.X(f"{x}:N", sort="-y"), y=alt.Y(f"{y}:Q"),
+                tooltip=tooltip, **color_enc,
+            )
+        if ctype == "line":
+            return base.mark_line(point=True).encode(
+                x=alt.X(x), y=alt.Y(f"{y}:Q"), tooltip=tooltip, **color_enc
+            )
+        if ctype == "area":
+            return base.mark_area(opacity=0.6).encode(
+                x=alt.X(x), y=alt.Y(f"{y}:Q"), tooltip=tooltip, **color_enc
+            )
+        if ctype == "scatter":
+            return base.mark_circle(size=70).encode(
+                x=alt.X(x), y=alt.Y(f"{y}:Q"), tooltip=tooltip, **color_enc
+            )
+        # Fallback to a bar chart for unknown types.
+        return base.mark_bar().encode(
+            x=alt.X(f"{x}:N"), y=alt.Y(f"{y}:Q"), tooltip=tooltip, **color_enc
+        )
+    except Exception:  # noqa: BLE001 - charting is best-effort
+        return None
+
+
 def run_agent(
     client: openai.OpenAI,
     mcp_client: SnowflakeMCPClient,
@@ -320,11 +494,11 @@ def run_agent(
     """Run the tool-calling loop until the model produces a final answer.
 
     ``messages`` is the full OpenAI message history (mutated in place).
-    ``on_step`` is a callback ``(tool_name, arguments, result)`` used to render
-    intermediate tool calls in the UI.
+    ``on_step`` is a callback taking a prebuilt ``step`` dict, used to render
+    each tool call (or chart) in the UI.
     Returns the final assistant text.
     """
-    tools = mcp_client.openai_tools()
+    tools = mcp_client.openai_tools() + [DISPLAY_CHART_TOOL]
 
     for _ in range(MAX_AGENT_STEPS):
         response = client.chat.completions.create(
@@ -366,13 +540,37 @@ def run_agent(
             except json.JSONDecodeError:
                 arguments = {}
 
-            try:
-                result = mcp_client.call_tool(name, arguments)
-                result_text = result.text or "(no output)"
-                on_step(name, arguments, result)
-            except Exception as exc:  # noqa: BLE001 - report failures to the model
-                result_text = f"Tool call failed: {exc}"
-                on_step(name, arguments, None, error=str(exc))
+            if name == "display_chart":
+                # Client-side tool: render a chart instead of calling the server.
+                point_count = len(arguments.get("data") or [])
+                on_step(
+                    {
+                        "tool": "display_chart",
+                        "arguments": {
+                            k: v for k, v in arguments.items() if k != "data"
+                        },
+                        "chart": arguments,
+                    }
+                )
+                result_text = (
+                    f"Chart ('{arguments.get('chart_type')}') rendered in the UI "
+                    f"with {point_count} data point(s)."
+                )
+            else:
+                try:
+                    result = mcp_client.call_tool(name, arguments)
+                    result_text = result.text or "(no output)"
+                    on_step(
+                        {
+                            "tool": name,
+                            "arguments": arguments,
+                            "text": result.text,
+                            "rows": result.rows,
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001 - report failures to model
+                    result_text = f"Tool call failed: {exc}"
+                    on_step({"tool": name, "arguments": arguments, "error": str(exc)})
 
             messages.append(
                 {
@@ -395,8 +593,28 @@ def run_agent(
 # --------------------------------------------------------------------------- #
 # UI helpers
 # --------------------------------------------------------------------------- #
+def render_chart_step(step: dict) -> None:
+    """Render a chart produced by the ``display_chart`` tool, inline (expanded)."""
+    spec = step["chart"]
+    title = spec.get("title") or "Chart"
+    st.markdown(f"**📊 {title}**")
+    chart = build_chart(spec)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.warning("Could not render the chart from the provided data.")
+    data = spec.get("data") or []
+    if data:
+        with st.expander("Chart data", expanded=False):
+            st.dataframe(pd.DataFrame(data), use_container_width=True)
+
+
 def render_step(step: dict) -> None:
-    """Render a single tool-call step inside an expander."""
+    """Render a single agent step (a tool call or a chart) in the UI."""
+    if "chart" in step:
+        render_chart_step(step)
+        return
+
     name = step["tool"]
     label = f"🛠️ `{name}`"
     if step.get("error"):
@@ -417,18 +635,17 @@ def render_step(step: dict) -> None:
             st.code(step.get("text", ""), language="json")
 
 
-def step_recorder(store: list[dict]):
-    """Build an ``on_step`` callback that records and live-renders steps."""
+def step_recorder(store: list[dict], show_tool_calls: bool = False):
+    """Build an ``on_step`` callback that records and live-renders prebuilt steps.
 
-    def _on_step(name: str, arguments: dict, result, error: Optional[str] = None):
-        step: dict[str, Any] = {"tool": name, "arguments": arguments}
-        if error is not None:
-            step["error"] = error
-        elif result is not None:
-            step["text"] = result.text
-            step["rows"] = result.rows
+    Charts always render; raw MCP tool-call steps render only when
+    ``show_tool_calls`` is True (they are still recorded either way).
+    """
+
+    def _on_step(step: dict[str, Any]):
         store.append(step)
-        render_step(step)
+        if "chart" in step or show_tool_calls:
+            render_step(step)
 
     return _on_step
 
@@ -522,6 +739,12 @@ with st.sidebar:
         st.stop()
 
     st.divider()
+    show_tool_calls = st.toggle(
+        "Show tool calls",
+        value=False,
+        help="Show the agent's underlying MCP tool calls (queries, table lists). "
+        "Charts and the final answer always show.",
+    )
     if st.button("🗑️ Clear conversation", use_container_width=True):
         st.session_state.openai_messages = [
             {"role": "system", "content": SYSTEM_PROMPT}
@@ -530,10 +753,31 @@ with st.sidebar:
         st.rerun()
 
     st.caption("Quick starts")
+
+    if creds.get("schema"):
+        deep_dive_target = f"the {creds['database']}.{creds['schema']} schema"
+    else:
+        deep_dive_target = (
+            f"the {creds['database']} database (first list its schemas, then pick "
+            "the most substantial/interesting one to deep-dive)"
+        )
+    deep_dive_prompt = (
+        f"Do a thorough, end-to-end data-science deep-dive of {deep_dive_target}. "
+        "Inventory the tables and their sizes; for the most important tables, "
+        "infer the grain and profile their columns (counts, distinct values, NULL "
+        "rates, ranges, top categories); assess data quality; surface outliers "
+        "and anomalies; examine relationships and any trends over time; include "
+        "charts for the most important findings; and finish with a "
+        "severity-ranked executive summary and recommended next steps."
+    )
+
     quick_prompts = {
+        "🔬 Deep-dive this schema": deep_dive_prompt,
         "List databases": "List all databases I can access.",
         "Explore tables": "Show me the tables in the current database and schema.",
         "Summarize data": "Pick an interesting table and show me a sample of its rows.",
+        "Chart it": "Pick an interesting table, aggregate a categorical column, "
+        "and show me a bar or pie chart of the result.",
     }
     quick_choice = None
     for label, prompt in quick_prompts.items():
@@ -548,7 +792,9 @@ if not st.session_state.chat:
 for item in st.session_state.chat:
     with st.chat_message(item["role"]):
         for step in item.get("steps", []):
-            render_step(step)
+            # Charts always render; raw MCP tool calls only when the user opts in.
+            if "chart" in step or show_tool_calls:
+                render_step(step)
         if item.get("content"):
             st.markdown(item["content"])
 
@@ -573,7 +819,7 @@ if prompt:
                     mcp_client=mcp_client,
                     model=model,
                     messages=st.session_state.openai_messages,
-                    on_step=step_recorder(steps),
+                    on_step=step_recorder(steps, show_tool_calls),
                 )
             st.markdown(answer)
         except openai.RateLimitError as exc:

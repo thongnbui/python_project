@@ -95,9 +95,12 @@ The first launch downloads the MCP server via `uvx`, which can take a minute.
 - "What tables are in the SNOWFLAKE_SAMPLE_DATA.TPCH_SF1 schema?"
 - "Describe the CUSTOMER table and show me 10 sample rows."
 - "Which 5 nations have the most customers?"
+- "Show me a **pie chart** of orders by status." / "Plot a bar chart of revenue by month."
 
 ## Notes
 
 - The agent is restricted to **read-only** exploration; it issues `SELECT`
   queries only and adds `LIMIT` clauses to avoid pulling huge result sets.
+- **Charts**: ask for a chart/graph/pie/plot and the agent queries the data,
+  then renders it inline (bar, line, area, scatter, or pie) via Altair.
 - Keep your `.env` out of version control (it contains secrets).
