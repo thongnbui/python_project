@@ -178,6 +178,21 @@ special characters.
 safe descriptive alias instead (e.g. ROW_COUNT, not ROWS) or double-quote it \
 ("ROWS"). Prefer clear non-reserved aliases like ROW_COUNT, NULL_COUNT, \
 DISTINCT_COUNT.
+- Parsing text dates/timestamps/numbers — follow this sequence, do NOT skip step 1:
+  1. SAMPLE FIRST. Before any conversion, look at real values: \
+SELECT DISTINCT col FROM <table> WHERE col IS NOT NULL LIMIT 10. Infer the exact \
+format from what you see (e.g. '20260601 062853.000' -> 'YYYYMMDD HH24MISS.FF3').
+  2. CONVERT with the TRY_ variant AND an explicit format string \
+(TRY_TO_TIMESTAMP(col, 'YYYYMMDD HH24MISS.FF3'), TRY_TO_DATE, TRY_TO_NUMBER, \
+TRY_TO_DECIMAL). Never use plain TO_DATE/TO_TIMESTAMP/TO_NUMBER on raw text \
+(they abort the query on a single bad value).
+  3. VALIDATE the parse. Compare parsed-non-null vs total \
+(COUNT_IF(TRY_TO_TIMESTAMP(col, fmt) IS NOT NULL) vs COUNT_IF(col IS NOT NULL)). \
+Beware the silent trap: TRY_ returns NULL for BOTH true NULLs AND \
+format-mismatches, so a wrong format makes everything NULL. If the parsed \
+non-null rate is unexpectedly low, your FORMAT is wrong (not the data) — \
+re-sample, try another format, and only report genuine unparseable values once \
+the format is confirmed correct.
 - If a query errors, read the message, explain the likely cause (wrong object, \
 insufficient privileges, suspended warehouse, type mismatch), and adjust — do \
 NOT repeatedly retry the same failing query.
