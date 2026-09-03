@@ -8,11 +8,57 @@ their data.
 
 ## How it works
 
+This is a **single-agent** app: one OpenAI model calls tools in a loop until it
+can answer. There is no multi-agent planner/executor graph.
+
 ```
-Streamlit UI  ──►  OpenAI (tool calling)  ──►  MCP client  ──►  Snowflake MCP server  ──►  Snowflake
-   (app.py)            decides which tool        (mcp_client.py)     (mcp_snowflake_server)
-                              ▲
-                       agent_core.py
+  ┌─ Login (app.py) ─────────────────────────────────────┐
+  │  Username / password (UI only)                       │
+  │  MCP service account loaded from .env (key-pair)     │
+  └──────────────────────────┬───────────────────────────┘
+                             │
+                             ▼
+  ┌─ Streamlit UI (app.py) ──────────────────────────────┐
+  │  Chat  ·  charts  ·  sidebar (connection + last-turn │
+  │  eval)                                               │
+  └──────────────────────────┬───────────────────────────┘
+                             │ user question
+                             ▼
+  ┌─ Agent loop (agent_core.run_agent) ──────────────────┐
+  │                                                      │
+  │   OpenAI model  ◄──────────────────────────────┐     │
+  │        │                                       │     │
+  │        │ tool calls                            │     │
+  │        ▼                                       │     │
+  │   ┌────────────────────┐   ┌────────────────┐  │     │
+  │   │ Local tools        │   │ MCP tools      │  │     │
+  │   │ • set_active_schema│   │ • list_*       │  │     │
+  │   │ • display_chart    │   │ • describe_    │  │     │
+  │   └─────────┬──────────┘   │   table        │  │     │
+  │             │              │ • read_query   │  │     │
+  │             │              └───────┬────────┘  │     │
+  │             │                      │           │     │
+  │             │              mcp_client.py       │     │
+  │             │                      │           │     │
+  │             │                      ▼           │     │
+  │             │         mcp_snowflake_server     │     │
+  │             │         (uv + launcher)          │     │
+  │             │                      │           │     │
+  │             │                      ▼           │     │
+  │             │                 Snowflake        │     │
+  │             │                      │           │     │
+  │             └──────────┬───────────┘           │     │
+  │                        │ tool results          │     │
+  │                        └───────────────────────┘     │
+  │                                                      │
+  │   Final answer (+ chart specs) ──► UI                │
+  └──────────────────────────┬───────────────────────────┘
+                             │ optional
+                             ▼
+  ┌─ Last-turn eval (evals/metrics.py) ──────────────────┐
+  │  Tool counts always · LLM judges when enabled        │
+  │  (see diagram below)                                 │
+  └──────────────────────────────────────────────────────┘
 ```
 
 The model is given the MCP server's tools (`list_databases`, `list_schemas`,
@@ -128,6 +174,55 @@ tool-trace expectation checks). See [`evals/README.md`](evals/README.md).
 In the Streamlit app, the sidebar **Last-turn eval** panel shows tool counts after
 each answer. Enable **Auto-score with LLM judges** (or click **Run LLM judges on
 last turn**) to see RAG Triad scores for the latest reply.
+
+### How the LLM judge works
+
+The **chat agent** (tool-calling model) and the **judge** (separate OpenAI call,
+default `EVAL_JUDGE_MODEL=gpt-4o`) are different models. After a turn finishes,
+`score_trace` packs the question, answer, and tool trace, then asks the judge
+for JSON scores:
+
+```
+  User question
+       │
+       ▼
+  ┌─────────────────────────────────────────┐
+  │  Agent (tool-calling model)             │
+  │  question ──► tools / SQL ──► answer    │
+  │               ▲                         │
+  │          tool steps (trace)             │
+  └──────────────────┬──────────────────────┘
+                     │
+                     │  question + answer + packed context
+                     ▼
+  ┌─────────────────────────────────────────┐
+  │  score_trace (evals/metrics.py)         │
+  │                                         │
+  │  1. Expectation checks (deterministic)  │
+  │     min tools / preferred / chart / err │
+  │                                         │
+  │  2. Pack judge context                  │
+  │     • this-turn tools → context relev.  │
+  │     • session + tools (+ prior turns    │
+  │       in Streamlit) → groundedness / AR │
+  │                                         │
+  │  3. LLM-as-judge (temp=0, JSON)         │
+  │     ┌───────────────────────────────┐   │
+  │     │ Answer relevance     ──► 0–1  │   │
+  │     │ Groundedness         ──► 0–1  │──►│ rag_triad_mean
+  │     │ Context relevance    ──► 0–1  │   │   = mean of three
+  │     └───────────────────────────────┘   │
+  │     Execution efficiency   ──► 0–1      │  (GPA-inspired;
+  │                                         │   not in triad mean)
+  └──────────────────┬──────────────────────┘
+                     │
+                     ▼
+        Streamlit sidebar  /  evals/results/*.json
+```
+
+**RAG Triad** catches answer quality failures (off-topic / invented / bad
+retrieval). **Execution efficiency** scores process quality (lean tool use).
+`--no-judge` skips step 3 and keeps only expectation checks.
 
 ## Notes
 
