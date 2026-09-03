@@ -1,4 +1,4 @@
-# ❄️ Snowflake Data Explorer (MCP chat agent)
+# Snowflake Data Explorer (MCP chat agent)
 
 A Streamlit chat app that connects to your Snowflake instance through the
 [`mcp_snowflake_server`](https://github.com/isaacwasserman/mcp-snowflake-server)
@@ -11,15 +11,20 @@ their data.
 ```
 Streamlit UI  ──►  OpenAI (tool calling)  ──►  MCP client  ──►  Snowflake MCP server  ──►  Snowflake
    (app.py)            decides which tool        (mcp_client.py)     (mcp_snowflake_server)
+                              ▲
+                       agent_core.py
 ```
 
 The model is given the MCP server's tools (`list_databases`, `list_schemas`,
-`list_tables`, `describe_table`, `read_query`, ...) and calls them in a loop
-until it can answer. Tool calls are shown inline so you can see exactly what
-SQL/lookups ran. Tabular results are rendered as dataframes.
+`list_tables`, `describe_table`, `read_query`, ...) plus two local tools
+(`set_active_schema`, `display_chart`). It calls them in a loop until it can
+answer. Charts render inline; raw MCP tool expanders stay hidden in the chat
+(steps are still recorded for debugging/evals).
 
 `mcp_client.py` hosts the async MCP session on a background event-loop thread so
 it can be driven from Streamlit's synchronous, rerun-on-every-click model.
+`mcp_server_launcher.py` patches JSON serialization before starting the MCP
+server (upstream Timestamp/Decimal issue).
 
 ## Setup
 
@@ -49,21 +54,19 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-   This creates a project-local `.venv/` folder containing its own `streamlit`,
-   `openai`, `mcp`, etc. (Note: a `.venv` is tied to its absolute path — if you
-   move or rename the folder, recreate it with the commands above.)
-
 3. **Configure the OpenAI key.** Copy the example env file and fill it in:
 
 ```bash
 cp .env.example .env
 ```
 
-The only **required** variable is `OPENAI_API_KEY` (the app's LLM key).
+The only **required** variable for the UI is `OPENAI_API_KEY`. Default model is
+`gpt-4o-mini` (override with `OPENAI_MODEL`).
 
 **Snowflake connection values are entered on the app's login page**, not in
 `.env`. Any `SNOWFLAKE_*` values you do set in `.env` are used only to
-*pre-fill* the login form for convenience.
+*pre-fill* the login form for convenience (the headless eval harness also reads
+them to connect without the UI).
 
 The app uses **Snowflake key-pair authentication** (`snowflake_jwt`), so you do
 not enter a Snowflake password. Snowflake stores the public key on the user, and
@@ -105,13 +108,6 @@ in the sidebar to switch accounts.
 .venv/bin/streamlit run app.py
 ```
 
-   Or activate the venv first and run it by name:
-
-```bash
-source .venv/bin/activate
-streamlit run app.py
-```
-
 The first launch downloads the MCP server via `uv run`, which can take a minute.
 
 ## Try asking
@@ -122,10 +118,20 @@ The first launch downloads the MCP server via `uv run`, which can take a minute.
 - "Which 5 nations have the most customers?"
 - "Show me a **pie chart** of orders by status." / "Plot a bar chart of revenue by month."
 
+## Evals
+
+A headless golden-query harness lives in `evals/` (RAG Triad-style judges +
+tool-trace expectation checks). See [`evals/README.md`](evals/README.md).
+
+```bash
+.venv/bin/python -m evals.run_eval --tags smoke --no-judge
+.venv/bin/python -m evals.run_eval --app-version "v1: base"
+```
+
 ## Notes
 
 - The agent is restricted to **read-only** exploration; it issues `SELECT`
   queries only and adds `LIMIT` clauses to avoid pulling huge result sets.
 - **Charts**: ask for a chart/graph/pie/plot and the agent queries the data,
   then renders it inline (bar, line, area, scatter, or pie) via Altair.
-- Keep your `.env` out of version control (it contains secrets).
+- Keep your `.env` and private keys out of version control.

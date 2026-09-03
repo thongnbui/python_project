@@ -1,0 +1,65 @@
+{
+  "version": "1",
+  "description": "Golden questions for the Snowflake MCP data agent. Placeholders {{database}} and {{schema}} are filled from env/CLI.",
+  "queries": [
+    {
+      "id": "list_databases",
+      "prompt": "List all databases I can access.",
+      "tags": ["inventory", "smoke"],
+      "expect": {
+        "min_tool_calls": 1,
+        "preferred_tools": ["list_databases"]
+      }
+    },
+    {
+      "id": "list_tables_in_schema",
+      "prompt": "Show me the tables in {{database}}.{{schema}}.",
+      "tags": ["inventory"],
+      "expect": {
+        "min_tool_calls": 1,
+        "preferred_tools": ["list_tables", "set_active_schema", "read_query"]
+      },
+      "requires_schema": true
+    },
+    {
+      "id": "describe_sample_table",
+      "prompt": "In {{database}}.{{schema}}, pick one real table, describe its columns, and show 5 sample rows.",
+      "tags": ["describe", "sample"],
+      "expect": {
+        "min_tool_calls": 2,
+        "preferred_tools": ["list_tables", "describe_table", "read_query"]
+      },
+      "requires_schema": true
+    },
+    {
+      "id": "row_counts",
+      "prompt": "Using INFORMATION_SCHEMA in {{database}}, list the 5 largest tables by ROW_COUNT (fully qualify names).",
+      "tags": ["metadata", "sql"],
+      "expect": {
+        "min_tool_calls": 1,
+        "preferred_tools": ["read_query"]
+      }
+    },
+    {
+      "id": "chart_category",
+      "prompt": "In {{database}}.{{schema}}, pick one real table and an interesting categorical column, aggregate the top categories, and show a pie or bar chart. In your answer, name the fully-qualified table ({{database}}.{{schema}}.TABLE) and the column you used.",
+      "tags": ["chart"],
+      "expect": {
+        "min_tool_calls": 2,
+        "preferred_tools": ["list_tables", "describe_table", "read_query", "display_chart"],
+        "require_chart": true
+      },
+      "requires_schema": true
+    },
+    {
+      "id": "data_quality_spotcheck",
+      "prompt": "In {{database}}.{{schema}}, pick one substantial table and report NULL rates for a few columns plus any obvious data-quality issues. Quantify with counts and percentages.",
+      "tags": ["dq", "profile"],
+      "expect": {
+        "min_tool_calls": 2,
+        "preferred_tools": ["list_tables", "describe_table", "read_query"]
+      },
+      "requires_schema": true
+    }
+  ]
+}
