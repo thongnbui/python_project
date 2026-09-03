@@ -115,7 +115,7 @@ _TOOL_BODY_CAPS: dict[str, int] = {
     "set_active_schema": 200,
     "describe_table": 6000,
     "read_query": 3000,
-    "display_chart": 800,
+    "display_chart": 1800,
     "append_insight": 400,
 }
 
@@ -170,6 +170,20 @@ def _compact_describe_table(text: str, arguments: Optional[dict[str, Any]]) -> s
     return header + body
 
 
+def _head_tail_json(rows: list[Any], head: int = 8, tail: int = 8) -> str:
+    """Serialize start + end of a series so later years survive packing."""
+    if len(rows) <= head + tail:
+        return json.dumps(rows, default=str)
+    return json.dumps(
+        {
+            "n": len(rows),
+            "head": rows[:head],
+            "tail": rows[-tail:],
+        },
+        default=str,
+    )
+
+
 def _format_step_piece(step: dict[str, Any]) -> tuple[str, str, int]:
     """Return ``(tool_name, formatted_piece, priority)`` for one step."""
     name = step.get("tool", "tool")
@@ -182,7 +196,7 @@ def _format_step_piece(step: dict[str, Any]) -> tuple[str, str, int]:
     elif "chart" in step:
         chart = step["chart"]
         data = chart.get("data") or []
-        sample = json.dumps(data[:8], default=str)
+        sample = _head_tail_json(data, head=6, tail=10)
         piece = (
             f"[display_chart] type={chart.get('chart_type')} "
             f"title={chart.get('title')} points={len(data)} "
@@ -191,12 +205,18 @@ def _format_step_piece(step: dict[str, Any]) -> tuple[str, str, int]:
         )
     else:
         body = step.get("text") or ""
-        if step.get("rows") is not None:
-            body = json.dumps(step["rows"][:50], default=str)
+        rows = step.get("rows")
+        query = arguments.get("query") if name == "read_query" else None
+        # Prefer non-empty row payloads; empty list must not shadow text
+        # (MCP list_* tools often have YAML text with rows=[]).
+        if isinstance(rows, list) and len(rows) > 0:
+            body = _head_tail_json(rows, head=15, tail=15)
         elif name == "list_tables":
             body = _compact_list_tables(body, arguments)
         elif name == "describe_table":
             body = _compact_describe_table(body, arguments)
+        if query:
+            body = f"sql={_truncate(str(query), 800)}\n{body}"
         piece = f"[{name}] {_truncate(body, body_cap)}"
     return name, piece, priority
 
@@ -317,9 +337,12 @@ def score_groundedness(
             "default\" is grounded. Compacted list_tables lines like "
             "\"tables(N): db.schema.T1, db.schema.T2, ...\" and describe_table "
             "lines like \"columns(N): COL:TYPE, ...\" are complete inventories — "
-            "treat every listed name as present in context. Penalize invented "
-            "tables, columns, numbers, or databases not present in session or "
-            "tool context. "
+            "treat every listed name as present in context. Chart/query samples "
+            "may be packed as {\"n\", \"head\", \"tail\"} — later points in "
+            "tail ARE in context (time series often start in head with older "
+            "years). SQL in a read_query block (sql=...) counts as evidence for "
+            "table names. Penalize invented tables, columns, numbers, or "
+            "databases not present in session or tool context. "
             "Return JSON: {\"score\": <float>, \"reason\": \"...\"}."
         ),
         user=(
@@ -338,8 +361,20 @@ def score_context_relevance(
     return _judge(
         client,
         system=(
-            "You evaluate context relevance. Score 0-1 whether the tool results "
-            "are useful for answering the question (even if incomplete). "
+            "You evaluate context relevance for a Snowflake tool-using agent. "
+            "Score 0-1 whether the tool results are ON-TOPIC and useful toward "
+            "answering the question — NOT whether they are complete enough to "
+            "fully answer it alone. Incomplete context that is still relevant "
+            "should score HIGH (typically 0.7–1.0). "
+            "Examples of relevant (score high): list_tables / list_schemas / "
+            "list_databases for inventory, overview, summary, or explore "
+            "questions; describe_table for schema/column questions; read_query "
+            "rows for quantitative claims; set_active_schema when the user "
+            "named a database.schema. "
+            "Score LOW (near 0) only when tools are empty, failed, or clearly "
+            "off-topic (wrong schema, unrelated tables, or no bearing on the "
+            "question). Do NOT penalize for missing describe/read_query steps "
+            "if the tools that DID run are appropriate for the question. "
             "Return JSON: {\"score\": <float>, \"reason\": \"...\"}."
         ),
         user=f"Question:\n{question}\n\nTool context:\n{context}",
@@ -367,6 +402,12 @@ def score_execution_efficiency(
             "Score 0-1: high if tools are necessary and non-redundant; low if "
             "there are repeated failures, pointless calls, or clear waste. "
             f"Observed stats: {json.dumps(efficiency)}. "
+            "If the question needs live Snowflake facts (list/find tables, "
+            "describe schema, summarize warehouse data, propose a star schema "
+            "from real tables) and tool_call_count is 0, score LOW (≤0.4) — "
+            "answering from memory without tools is not efficient correctness. "
+            "Pure design questions with no warehouse object claims may score "
+            "high with zero tools. "
             "Return JSON: {\"score\": <float>, \"reason\": \"...\"}."
         ),
         user=f"Question:\n{question}\n\nTool trace:\n{trace}",
@@ -410,15 +451,23 @@ def score_trace(
     judge: bool = True,
     creds: Optional[dict[str, Any]] = None,
     active: Optional[dict[str, Any]] = None,
+    prior_steps: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
-    """Run expectation checks + optional RAG Triad / efficiency judges."""
+    """Run expectation checks + optional RAG Triad / efficiency judges.
+
+    ``steps`` are this turn's tools (efficiency + context relevance).
+    ``prior_steps`` (earlier chat tool traces) are merged only into groundedness /
+    answer-relevance evidence so multi-turn reuse is not scored as invention.
+    """
     expectations = check_expectations(steps, expect)
     tool_only = tool_contexts(steps)
-    # Groundedness may use session facts; context-relevance stays tool-focused.
-    grounded_context = judge_context(steps, creds=creds, active=active)
+    ground_steps = list(prior_steps or []) + list(steps)
+    # Groundedness may use session facts + prior/current tools.
+    grounded_context = judge_context(ground_steps, creds=creds, active=active)
     result: dict[str, Any] = {
         "expectations": expectations,
         "context_preview": grounded_context[:1500],
+        "prior_tool_steps": len(prior_steps or []),
     }
     if not judge:
         return result
@@ -429,9 +478,20 @@ def score_trace(
     result["groundedness"] = score_groundedness(
         client, question, answer, grounded_context
     )
-    result["context_relevance"] = score_context_relevance(
-        client, question, tool_only
-    )
+    this_turn_tools = [s for s in steps if s.get("tool")]
+    if not this_turn_tools:
+        result["context_relevance"] = {
+            "score": 0.0,
+            "reason": (
+                "No tools called this turn, so there is no newly retrieved "
+                "context to score. (Earlier turns' tools can still support "
+                "groundedness.)"
+            ),
+        }
+    else:
+        result["context_relevance"] = score_context_relevance(
+            client, question, tool_only
+        )
     result["execution_efficiency"] = score_execution_efficiency(
         client, question, steps, expectations["efficiency"]
     )

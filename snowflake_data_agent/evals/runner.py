@@ -17,6 +17,7 @@ from agent_core import (
     DEFAULT_MODEL,
     build_server_params,
     build_system_prompt,
+    load_mcp_creds_from_env,
     run_agent,
 )
 from evals.metrics import score_trace
@@ -28,29 +29,12 @@ DEFAULT_RESULTS_DIR = Path(__file__).resolve().parent / "results"
 
 
 def load_creds_from_env() -> dict[str, str]:
-    """Build a credentials dict from environment variables."""
+    """Build MCP credentials from environment variables."""
     load_dotenv(ROOT / ".env")
-    required = {
-        "account": os.getenv("SNOWFLAKE_ACCOUNT", ""),
-        "user": os.getenv("SNOWFLAKE_USER", ""),
-        "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", ""),
-        "database": os.getenv("SNOWFLAKE_DATABASE", ""),
-        "private_key_file": os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE")
-        or os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH", ""),
-    }
-    missing = [k for k, v in required.items() if not v.strip()]
-    if missing:
-        raise SystemExit(
-            "Missing Snowflake env for evals: "
-            + ", ".join(missing)
-            + ". Set them in .env (same keys as the app login prefill)."
-        )
-    return {
-        **{k: v.strip() for k, v in required.items()},
-        "role": (os.getenv("SNOWFLAKE_ROLE") or "").strip(),
-        "schema": (os.getenv("SNOWFLAKE_SCHEMA") or "").strip(),
-        "private_key_pwd": os.getenv("SNOWFLAKE_PRIVATE_KEY_PWD") or "",
-    }
+    try:
+        return load_mcp_creds_from_env()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def load_golden(path: Path = DEFAULT_GOLDEN) -> dict[str, Any]:

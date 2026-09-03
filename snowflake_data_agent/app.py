@@ -29,6 +29,7 @@ from agent_core import (
     build_server_params,
     build_system_prompt,
     connection_cache_key,
+    load_mcp_creds_from_env,
     run_agent,
 )
 from mcp_client import SnowflakeMCPClient
@@ -88,93 +89,36 @@ def get_mcp_client(cache_key: str, _creds: dict) -> SnowflakeMCPClient:
     return SnowflakeMCPClient(build_server_params(_creds))
 
 def render_login() -> None:
-    """Render the Snowflake sign-in form. Stores creds in session on submit."""
+    """Render the app sign-in form. MCP uses ``.env`` service-account creds."""
     st.image(OPENISSUE_LOGO_URL, width=260)
     st.title("❄️ Snowflake Data Explorer")
     st.caption(
         f"by [Open Issue]({OPENISSUE_SITE_URL}) — *{OPENISSUE_TAGLINE}*  \n"
-        "Sign in to your Snowflake instance to start exploring your data."
+        "Sign in to explore Snowflake data. Warehouse access uses the MCP "
+        "service account from `.env` (key-pair); this login is separate."
     )
 
     with st.form("login_form"):
-        st.subheader("Connect to Snowflake")
-        account = st.text_input(
-            "Account identifier",
-            value=os.getenv("SNOWFLAKE_ACCOUNT", ""),
-            help="e.g. `orgname-accountname` or `locator.region` "
-            "(from your Snowsight URL).",
-        )
-        user = st.text_input("User", value=os.getenv("SNOWFLAKE_USER", ""))
+        st.subheader("Sign in")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("🔐 Sign in", width="stretch")
 
-        col_w, col_d = st.columns(2)
-        with col_w:
-            warehouse = st.text_input(
-                "Warehouse", value=os.getenv("SNOWFLAKE_WAREHOUSE", "")
-            )
-        with col_d:
-            database = st.text_input(
-                "Database", value=os.getenv("SNOWFLAKE_DATABASE", "")
-            )
+    if not submitted:
+        return
 
-        col_r, col_s = st.columns(2)
-        with col_r:
-            role = st.text_input(
-                "Role (optional)", value=os.getenv("SNOWFLAKE_ROLE", "")
-            )
-        with col_s:
-            schema = st.text_input(
-                "Schema (optional)",
-                value=os.getenv("SNOWFLAKE_SCHEMA", ""),
-                placeholder=f"{DEFAULT_SCHEMA} (explore all schemas)",
-            )
+    if not username.strip() or not password:
+        st.error("Please enter a username and password.")
+        return
 
-        with st.expander("Key-pair authentication"):
-            st.caption(
-                "The app uses Snowflake key-pair auth (`snowflake_jwt`). "
-                "Register the matching public key on the Snowflake user as "
-                "`RSA_PUBLIC_KEY`, then provide the private `.p8` file here."
-            )
-            private_key_file = st.text_input(
-                "Private key file",
-                value=os.getenv(
-                    "SNOWFLAKE_PRIVATE_KEY_FILE",
-                    os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH", ""),
-                ),
-                placeholder="/Users/thongbui/.snowflake/rsa_key.p8",
-                help="Snowflake stores the matching RSA_PUBLIC_KEY on the user; "
-                "the app authenticates with this private key file.",
-            )
-            private_key_pwd = st.text_input(
-                "Private key passphrase (optional)",
-                type="password",
-                value=os.getenv("SNOWFLAKE_PRIVATE_KEY_PWD", ""),
-            )
+    try:
+        st.session_state.sf_creds = load_mcp_creds_from_env()
+    except ValueError as exc:
+        st.error(str(exc))
+        return
 
-        submitted = st.form_submit_button("🔐 Connect", width="stretch")
-
-    if submitted:
-        fields = {
-            "Account": account,
-            "User": user,
-            "Warehouse": warehouse,
-            "Database": database,
-            "Private key file": private_key_file,
-        }
-        missing = [name for name, value in fields.items() if not value.strip()]
-        if missing:
-            st.error("Please fill in: " + ", ".join(missing))
-            return
-        st.session_state.sf_creds = {
-            "account": account.strip(),
-            "user": user.strip(),
-            "warehouse": warehouse.strip(),
-            "role": role.strip(),
-            "database": database.strip(),
-            "schema": schema.strip(),
-            "private_key_file": private_key_file.strip(),
-            "private_key_pwd": private_key_pwd,
-        }
-        st.rerun()
+    st.session_state.app_user = username.strip()
+    st.rerun()
 
 
 def build_chart(spec: dict) -> Optional[alt.Chart]:
@@ -313,6 +257,152 @@ def step_recorder(store: list[dict]):
 
     return _on_step
 
+
+def _fmt_score(value: Any) -> str:
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def prior_chat_tool_steps(chat: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collect tool steps from earlier assistant turns (exclude the latest)."""
+    if len(chat) < 2:
+        return []
+    prior: list[dict[str, Any]] = []
+    for item in chat[:-1]:
+        if item.get("role") == "assistant":
+            prior.extend(item.get("steps") or [])
+    return prior
+
+
+def score_last_turn(
+    *,
+    client: openai.OpenAI,
+    question: str,
+    answer: str,
+    steps: list[dict],
+    creds: dict,
+    active: Optional[dict],
+    judge: bool,
+    prior_steps: Optional[list[dict]] = None,
+) -> dict[str, Any]:
+    """Score one chat turn with the eval harness metrics."""
+    from evals.metrics import score_trace
+
+    return score_trace(
+        client,
+        question=question,
+        answer=answer,
+        steps=steps,
+        judge=judge,
+        creds=creds,
+        active=active,
+        prior_steps=prior_steps,
+    )
+
+
+def render_eval_sidebar(eval_result: Optional[dict[str, Any]]) -> None:
+    """Render last-turn tool stats + optional RAG Triad scores in the sidebar."""
+    st.divider()
+    st.subheader("Last-turn eval")
+    st.checkbox(
+        "Auto-score with LLM judges",
+        value=False,
+        help="Runs RAG Triad + efficiency judges after each answer "
+        "(extra OpenAI calls). Tool counts always update.",
+        key="auto_judge",
+    )
+    if not eval_result:
+        st.caption("Ask a question to see tool counts and optional triad scores.")
+        return
+
+    if eval_result.get("error"):
+        st.warning(f"Eval error: {eval_result['error']}")
+
+    eff = eval_result.get("expectations", {}).get("efficiency") or {}
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tools", eff.get("tool_call_count", 0))
+    c2.metric("Errors", eff.get("error_count", 0))
+    c3.metric("Charts", eff.get("chart_count", 0))
+    tools = eff.get("unique_tools") or []
+    if tools:
+        st.caption("Tools used: `" + "`, `".join(tools) + "`")
+    elif (eff.get("tool_call_count") or 0) == 0:
+        prior_n = int(eval_result.get("prior_tool_steps") or 0)
+        st.warning(
+            "This turn called **0 tools**. Context relevance stays 0 "
+            "(nothing newly retrieved). "
+            + (
+                f"Groundedness can still use {prior_n} earlier tool step(s)."
+                if prior_n
+                else "No earlier tool evidence either — expect groundedness 0."
+            )
+        )
+
+    triad = eval_result.get("rag_triad_mean")
+    if triad is None:
+        payload = st.session_state.get("last_eval_payload")
+        if payload and st.button(
+            "Run LLM judges on last turn",
+            width="stretch",
+            help="Scores the previous answer with RAG Triad judges.",
+        ):
+            try:
+                with st.spinner("Scoring..."):
+                    st.session_state.last_eval = score_last_turn(
+                        client=openai.OpenAI(),
+                        question=payload["question"],
+                        answer=payload["answer"],
+                        steps=payload["steps"],
+                        creds=payload["creds"],
+                        active=payload.get("active"),
+                        judge=True,
+                        prior_steps=payload.get("prior_steps") or [],
+                    )
+            except Exception as exc:  # noqa: BLE001
+                st.session_state.last_eval = {
+                    **eval_result,
+                    "error": str(exc),
+                }
+            st.rerun()
+        elif not st.session_state.get("auto_judge"):
+            st.caption(
+                "Enable auto-score, or click the button above after a turn."
+            )
+        return
+
+    st.metric("RAG triad mean", _fmt_score(triad))
+    rows = []
+    for key, label in (
+        ("answer_relevance", "Answer relevance"),
+        ("groundedness", "Groundedness"),
+        ("context_relevance", "Context relevance"),
+        ("execution_efficiency", "Execution efficiency"),
+    ):
+        metric = eval_result.get(key) or {}
+        rows.append(
+            {
+                "Metric": label,
+                "Score": _fmt_score(metric.get("score")),
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    with st.expander("Judge reasons", expanded=False):
+        for key, label in (
+            ("answer_relevance", "Answer relevance"),
+            ("groundedness", "Groundedness"),
+            ("context_relevance", "Context relevance"),
+            ("execution_efficiency", "Execution efficiency"),
+        ):
+            metric = eval_result.get(key) or {}
+            reason = (metric.get("reason") or "").strip()
+            if reason:
+                st.markdown(f"**{label}** ({_fmt_score(metric.get('score'))})")
+                st.write(reason)
+
+
 st.set_page_config(
     page_title="Snowflake Data Explorer · Open Issue",
     page_icon=OPENISSUE_ICON_URL,
@@ -331,14 +421,24 @@ except Exception:  # noqa: BLE001 - st.logo is best-effort branding
     pass
 
 # --- Login gate ----------------------------------------------------------- #
-if "sf_creds" not in st.session_state:
+if "app_user" not in st.session_state or "sf_creds" not in st.session_state:
     render_login()
     st.stop()
 
 creds = st.session_state.sf_creds
 if not creds.get("private_key_file"):
-    st.warning("Please reconnect with a Snowflake private key file.")
-    for key in ("sf_creds", "openai_messages", "chat", "active_schema"):
+    st.warning(
+        "MCP private key missing. Set `SNOWFLAKE_PRIVATE_KEY_FILE` in `.env`."
+    )
+    for key in (
+        "app_user",
+        "sf_creds",
+        "openai_messages",
+        "chat",
+        "active_schema",
+        "last_eval",
+        "last_eval_payload",
+    ):
         st.session_state.pop(key, None)
     render_login()
     st.stop()
@@ -360,6 +460,10 @@ if "openai_messages" not in st.session_state:
     ]
 if "chat" not in st.session_state:
     st.session_state.chat = []  # Display items: {role, content, steps}
+if "last_eval" not in st.session_state:
+    st.session_state.last_eval = None
+if "auto_judge" not in st.session_state:
+    st.session_state.auto_judge = False
 
 
 def apply_active_schema(database: str, schema: str) -> str:
@@ -377,8 +481,10 @@ def apply_active_schema(database: str, schema: str) -> str:
 # --- Sidebar: connection + tools ----------------------------------------- #
 with st.sidebar:
     st.header("Connection")
+    st.write(f"**Signed in:** `{st.session_state.app_user}`")
+    st.caption("MCP service account (from `.env`)")
     st.write(f"**Account:** `{creds['account']}`")
-    st.write(f"**User:** `{creds['user']}`")
+    st.write(f"**MCP user:** `{creds['user']}`")
     st.write(f"**Warehouse:** `{creds['warehouse']}`")
     if creds.get("role"):
         st.write(f"**Role:** `{creds['role']}`")
@@ -402,7 +508,15 @@ with st.sidebar:
 
     if st.button("🔓 Log out", width="stretch"):
         get_mcp_client.clear()  # drop cached connection(s)
-        for key in ("sf_creds", "openai_messages", "chat", "active_schema"):
+        for key in (
+            "app_user",
+            "sf_creds",
+            "openai_messages",
+            "chat",
+            "active_schema",
+            "last_eval",
+            "last_eval_payload",
+        ):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -440,6 +554,8 @@ with st.sidebar:
             {"role": "system", "content": build_system_prompt(creds, None)}
         ]
         st.session_state.chat = []
+        st.session_state.last_eval = None
+        st.session_state.pop("last_eval_payload", None)
         st.rerun()
 
     st.caption("Quick starts")
@@ -473,6 +589,8 @@ with st.sidebar:
     for label, prompt in quick_prompts.items():
         if st.button(label, width="stretch"):
             quick_choice = prompt
+
+    render_eval_sidebar(st.session_state.last_eval)
 
 # --- Render existing conversation ----------------------------------------- #
 if not st.session_state.chat:
@@ -533,3 +651,53 @@ if prompt:
     st.session_state.chat.append(
         {"role": "assistant", "content": answer, "steps": steps}
     )
+    prior_steps = prior_chat_tool_steps(st.session_state.chat)
+
+    # Always record tool stats; optionally run LLM judges (sidebar toggle).
+    try:
+        judge = bool(st.session_state.get("auto_judge", False))
+        with st.spinner(
+            "Scoring last turn..." if judge else "Recording tool stats..."
+        ):
+            st.session_state.last_eval = score_last_turn(
+                client=oai_client,
+                question=prompt,
+                answer=answer,
+                steps=steps,
+                creds=creds,
+                active=st.session_state.active_schema,
+                judge=judge,
+                prior_steps=prior_steps,
+            )
+        st.session_state.last_eval_payload = {
+            "question": prompt,
+            "answer": answer,
+            "steps": steps,
+            "prior_steps": prior_steps,
+            "creds": creds,
+            "active": st.session_state.active_schema,
+        }
+    except Exception as exc:  # noqa: BLE001 - evals must not break chat
+        st.session_state.last_eval = {
+            "expectations": {
+                "efficiency": {
+                    "tool_call_count": len(steps),
+                    "error_count": sum(1 for s in steps if s.get("error")),
+                    "chart_count": sum(1 for s in steps if "chart" in s),
+                    "unique_tools": sorted(
+                        {s.get("tool") for s in steps if s.get("tool")}
+                    ),
+                }
+            },
+            "prior_tool_steps": len(prior_steps),
+            "error": str(exc),
+        }
+        st.session_state.last_eval_payload = {
+            "question": prompt,
+            "answer": answer,
+            "steps": steps,
+            "prior_steps": prior_steps,
+            "creds": creds,
+            "active": st.session_state.active_schema,
+        }
+    st.rerun()

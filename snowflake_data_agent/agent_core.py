@@ -91,6 +91,11 @@ database (e.g. `analytics.events` wrongly becomes \
 via list_tables for the active schema (and describe_table for its columns). If a \
 referenced object is unknown, list the schema's tables first and use the real \
 names.
+- Do NOT rely on earlier chat memory alone when naming tables, columns, or \
+proposing schemas (star schemas, GL inventories, summaries). Even if you listed \
+objects in a previous turn, re-call list_tables / describe_table / read_query in \
+the CURRENT turn so the answer is freshly grounded. Memory without a tool call \
+this turn is treated as ungrounded.
 - If it is unclear which schema the user means, use the active context when one \
 is set; otherwise fall back to the connection's default database/schema or ask.
 
@@ -283,6 +288,35 @@ def build_system_prompt(creds: dict, active: Optional[dict] = None) -> str:
         + "\n\nSESSION CONTEXT (current Snowflake login)\n"
         + "\n".join(lines)
     )
+
+
+def load_mcp_creds_from_env() -> dict[str, str]:
+    """Load Snowflake MCP service-account credentials from the environment.
+
+    These drive the MCP server (key-pair / JWT). They are separate from the
+    Streamlit login username/password entered on the app form.
+    """
+    required = {
+        "account": os.getenv("SNOWFLAKE_ACCOUNT", ""),
+        "user": os.getenv("SNOWFLAKE_USER", ""),
+        "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", ""),
+        "database": os.getenv("SNOWFLAKE_DATABASE", ""),
+        "private_key_file": os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE")
+        or os.getenv("SNOWFLAKE_PRIVATE_KEY_PATH", ""),
+    }
+    missing = [k for k, v in required.items() if not str(v).strip()]
+    if missing:
+        raise ValueError(
+            "Missing Snowflake MCP env: "
+            + ", ".join(missing)
+            + ". Set them in .env (service account for the MCP connection)."
+        )
+    return {
+        **{k: str(v).strip() for k, v in required.items()},
+        "role": (os.getenv("SNOWFLAKE_ROLE") or "").strip(),
+        "schema": (os.getenv("SNOWFLAKE_SCHEMA") or "").strip(),
+        "private_key_pwd": os.getenv("SNOWFLAKE_PRIVATE_KEY_PWD") or "",
+    }
 
 
 def build_server_params(creds: dict) -> StdioServerParameters:

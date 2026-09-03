@@ -60,19 +60,25 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-The only **required** variable for the UI is `OPENAI_API_KEY`. Default model is
-`gpt-4o-mini` (override with `OPENAI_MODEL`).
+The UI requires `OPENAI_API_KEY`. Default chat model is `gpt-4o-mini`
+(override with `OPENAI_MODEL`).
 
-**Snowflake connection values are entered on the app's login page**, not in
-`.env`. Any `SNOWFLAKE_*` values you do set in `.env` are used only to
-*pre-fill* the login form for convenience (the headless eval harness also reads
-them to connect without the UI).
+The Streamlit **login page** asks for a username and password (entered by the
+user; not configured in `.env`). Warehouse access uses a separate **MCP service
+account** from `.env` (key-pair / JWT):
 
-The app uses **Snowflake key-pair authentication** (`snowflake_jwt`), so you do
-not enter a Snowflake password. Snowflake stores the public key on the user, and
-the app authenticates with the matching private `.p8` file.
+```bash
+SNOWFLAKE_ACCOUNT="..."
+SNOWFLAKE_USER="your_mcp_service_user"   # e.g. S19_INT_AIRFLOW_AUTH_423
+SNOWFLAKE_WAREHOUSE="..."
+SNOWFLAKE_DATABASE="..."
+SNOWFLAKE_PRIVATE_KEY_FILE="/path/to/rsa_key.p8"
+# SNOWFLAKE_ROLE / SNOWFLAKE_SCHEMA optional
+```
 
-Generate a private/public key pair:
+The headless eval harness reads the same `SNOWFLAKE_*` keys.
+
+Generate a private/public key pair for the **MCP** user:
 
 ```bash
 mkdir -p ~/.snowflake
@@ -80,27 +86,18 @@ openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out ~/.snowflake/rsa_key
 openssl rsa -in ~/.snowflake/rsa_key.p8 -pubout -out ~/.snowflake/rsa_key.pub
 ```
 
-Register the public key on your Snowflake user (paste the body of
+Register the public key on that Snowflake user (paste the body of
 `rsa_key.pub`, without the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----`
 lines):
 
 ```sql
-ALTER USER <your_user> SET RSA_PUBLIC_KEY='MIIBIjANBgkq...';
+ALTER USER <mcp_service_user> SET RSA_PUBLIC_KEY='MIIBIjANBgkq...';
 ```
 
-Then either enter the private key path in the login form or pre-fill it in
-`.env`:
-
-```bash
-SNOWFLAKE_PRIVATE_KEY_FILE="/Users/you/.snowflake/rsa_key.p8"
-# SNOWFLAKE_PRIVATE_KEY_PWD="optional_private_key_passphrase"
-```
-
-On the login screen you provide: **Account**, **User**, **Private key file**,
-**Warehouse**, **Database** (required), plus optional **Role**, **Schema**, and
-private-key passphrase. Leave Schema blank to explore **all** schemas; it
-defaults to `INFORMATION_SCHEMA` just to satisfy the connection. Use **Log out**
-in the sidebar to switch accounts.
+On the login screen you enter **Username** / **Password**. Leave
+`SNOWFLAKE_SCHEMA` blank to explore **all** schemas; it defaults to
+`INFORMATION_SCHEMA` just to satisfy the connection. Use **Log out** in the
+sidebar to end the app session.
 
 4. **Run the app** using the venv's Streamlit directly:
 
@@ -127,6 +124,10 @@ tool-trace expectation checks). See [`evals/README.md`](evals/README.md).
 .venv/bin/python -m evals.run_eval --tags smoke --no-judge
 .venv/bin/python -m evals.run_eval --app-version "v1: base"
 ```
+
+In the Streamlit app, the sidebar **Last-turn eval** panel shows tool counts after
+each answer. Enable **Auto-score with LLM judges** (or click **Run LLM judges on
+last turn**) to see RAG Triad scores for the latest reply.
 
 ## Notes
 
