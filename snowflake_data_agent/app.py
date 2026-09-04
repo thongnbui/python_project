@@ -44,6 +44,20 @@ OPENISSUE_ICON_URL = (
 OPENISSUE_SITE_URL = "https://open-issue.com/"
 OPENISSUE_TAGLINE = "making sense of your data℠"
 
+# Per-browser Streamlit session keys (isolated across concurrent users).
+_SESSION_KEYS = (
+    "app_user",
+    "sf_creds",
+    "mcp_client",
+    "mcp_cache_key",
+    "openai_messages",
+    "chat",
+    "active_schema",
+    "last_eval",
+    "last_eval_payload",
+    "auto_judge",
+)
+
 
 def welcome_message(database: str) -> str:
     """Intro shown at the start of a fresh conversation."""
@@ -77,16 +91,47 @@ never modify your data).
 What would you like to explore? 🔬"""
 
 # --------------------------------------------------------------------------- #
-# Connection
+# Connection (per Streamlit browser session — safe for concurrent users)
 # --------------------------------------------------------------------------- #
-@st.cache_resource(show_spinner="Connecting to Snowflake...")
-def get_mcp_client(cache_key: str, _creds: dict) -> SnowflakeMCPClient:
-    """Create (and cache) the MCP client for the given credentials.
 
-    ``cache_key`` is hashed by Streamlit to key the cache; ``_creds`` is prefixed
-    with an underscore so Streamlit does not try to hash the (mutable) dict.
+
+def _close_session_mcp() -> None:
+    """Shut down this browser session's MCP client only."""
+    client = st.session_state.pop("mcp_client", None)
+    st.session_state.pop("mcp_cache_key", None)
+    if client is None:
+        return
+    try:
+        client.close()
+    except Exception:  # noqa: BLE001 - best-effort teardown
+        pass
+
+
+def clear_login_session() -> None:
+    """End this user's login: close MCP and wipe session-only state."""
+    _close_session_mcp()
+    for key in _SESSION_KEYS:
+        st.session_state.pop(key, None)
+
+
+def get_session_mcp_client(creds: dict) -> SnowflakeMCPClient:
+    """Return a Snowflake MCP client owned by this browser session.
+
+    Each concurrent Streamlit user gets their own MCP subprocess / Snowflake
+    connection. Logout or failure in one session must not tear down others
+    (unlike a process-wide ``@st.cache_resource``).
     """
-    return SnowflakeMCPClient(build_server_params(_creds))
+    key = connection_cache_key(creds)
+    existing = st.session_state.get("mcp_client")
+    if existing is not None and st.session_state.get("mcp_cache_key") == key:
+        return existing
+
+    _close_session_mcp()
+    client = SnowflakeMCPClient(build_server_params(creds))
+    st.session_state.mcp_client = client
+    st.session_state.mcp_cache_key = key
+    return client
+
 
 def render_login() -> None:
     """Render the app sign-in form. MCP uses ``.env`` service-account creds."""
@@ -430,16 +475,7 @@ if not creds.get("private_key_file"):
     st.warning(
         "MCP private key missing. Set `SNOWFLAKE_PRIVATE_KEY_FILE` in `.env`."
     )
-    for key in (
-        "app_user",
-        "sf_creds",
-        "openai_messages",
-        "chat",
-        "active_schema",
-        "last_eval",
-        "last_eval_payload",
-    ):
-        st.session_state.pop(key, None)
+    clear_login_session()
     render_login()
     st.stop()
 
@@ -507,17 +543,7 @@ with st.sidebar:
         st.caption("📌 Active context: session default")
 
     if st.button("🔓 Log out", width="stretch"):
-        get_mcp_client.clear()  # drop cached connection(s)
-        for key in (
-            "app_user",
-            "sf_creds",
-            "openai_messages",
-            "chat",
-            "active_schema",
-            "last_eval",
-            "last_eval_payload",
-        ):
-            st.session_state.pop(key, None)
+        clear_login_session()
         st.rerun()
 
     model_options = list(
@@ -534,17 +560,18 @@ with st.sidebar:
     )
 
     try:
-        mcp_client = get_mcp_client(connection_cache_key(creds), creds)
+        with st.spinner("Connecting to Snowflake..."):
+            mcp_client = get_session_mcp_client(creds)
         st.success("Connected to Snowflake")
     except Exception as exc:  # noqa: BLE001 - show connection errors in UI
         st.error(f"Could not connect to the Snowflake MCP server:\n\n{exc}")
         st.info(
-            "Check your Snowflake credentials and try again. Use **Log out** to "
-            "return to the sign-in screen. (The first launch also downloads the "
-            "MCP server via `uv`, which can take a minute.)"
+            "Check your Snowflake credentials in `.env` and try again. Use "
+            "**Log out** to return to the sign-in screen. (The first launch also "
+            "downloads the MCP server via `uv`, which can take a minute.)"
         )
-        # Drop the failed cached client so the next attempt reconnects cleanly.
-        get_mcp_client.clear()
+        # Drop only this session's failed client so retry can reconnect.
+        _close_session_mcp()
         st.stop()
 
     st.divider()

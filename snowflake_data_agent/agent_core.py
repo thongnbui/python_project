@@ -418,14 +418,85 @@ def _message_size(message: dict) -> int:
     return size
 
 
+def repair_tool_message_history(messages: list[dict]) -> list[dict]:
+    """Fix histories that would make OpenAI reject the request.
+
+    OpenAI requires every ``assistant`` ``tool_calls`` entry to be followed by
+    a ``tool`` message for each ``tool_call_id``. Interruptions (UI errors mid
+    loop, crashes, partial saves) can leave gaps. This repairs **in place**:
+
+    - Trailing incomplete groups get synthetic tool error responses.
+    - Broken mid-history groups (and orphan ``tool`` messages) are dropped.
+    """
+    if not messages:
+        return messages
+
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        role = msg.get("role")
+
+        if role == "tool":
+            # Orphan tool response with no preceding assistant tool_calls.
+            del messages[i]
+            continue
+
+        tool_calls = msg.get("tool_calls") if role == "assistant" else None
+        if not tool_calls:
+            i += 1
+            continue
+
+        required = {
+            str(tc.get("id"))
+            for tc in tool_calls
+            if isinstance(tc, dict) and tc.get("id")
+        }
+        j = i + 1
+        seen: set[str] = set()
+        while j < len(messages) and messages[j].get("role") == "tool":
+            tid = messages[j].get("tool_call_id")
+            if tid:
+                seen.add(str(tid))
+            j += 1
+
+        missing = required - seen
+        if not missing:
+            i = j
+            continue
+
+        # Trailing incomplete group (interrupted mid-turn): synthesize replies.
+        if j >= len(messages):
+            for tid in sorted(missing):
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tid,
+                        "content": (
+                            "[tool result missing — previous turn was "
+                            "interrupted before this tool finished]"
+                        ),
+                    }
+                )
+            break
+
+        # Broken pairing in the middle of history: drop the bad group.
+        del messages[i:j]
+
+    return messages
+
+
 def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list[dict]:
     """Keep the system prompt + the most recent messages within a char budget.
 
     Cuts only at ``user`` message boundaries so we never orphan an assistant
     ``tool_calls`` message from its ``tool`` responses (OpenAI rejects that).
+    Always runs ``repair_tool_message_history`` on the kept window.
     """
     if not messages:
         return messages
+    # Repair the live history first so session state stays API-valid.
+    repair_tool_message_history(messages)
+
     system = messages[:1] if messages[0]["role"] == "system" else []
     body = messages[len(system):]
 
@@ -465,7 +536,7 @@ def trim_messages(messages: list[dict], budget: int = MAX_CONTEXT_CHARS) -> list
                 kept[i] = shrunk
                 total -= len(content) - len(shrunk["content"])
 
-    return kept
+    return repair_tool_message_history(kept)
 
 # A client-side tool that lets the model set the conversation's active schema,
 # which is tracked deterministically in session state (not just in chat history).
@@ -615,61 +686,109 @@ def run_agent(
             }
         )
 
-        for tool_call in message.tool_calls:
-            name = tool_call.function.name
-            try:
-                arguments = json.loads(tool_call.function.arguments or "{}")
-            except json.JSONDecodeError:
-                arguments = {}
-
-            if name == "set_active_schema":
-                # Client-side tool: update the deterministic active-schema state.
-                db = arguments.get("database")
-                sc = arguments.get("schema")
-                if db and sc and apply_active_schema is not None:
-                    result_text = apply_active_schema(db, sc)
-                else:
-                    result_text = "Need both 'database' and 'schema' to set context."
-                on_step({"tool": "set_active_schema", "arguments": arguments})
-            elif name == "display_chart":
-                # Client-side tool: render a chart instead of calling the server.
-                point_count = len(arguments.get("data") or [])
-                on_step(
-                    {
-                        "tool": "display_chart",
-                        "arguments": {
-                            k: v for k, v in arguments.items() if k != "data"
-                        },
-                        "chart": arguments,
-                    }
-                )
-                result_text = (
-                    f"Chart ('{arguments.get('chart_type')}') rendered in the UI "
-                    f"with {point_count} data point(s)."
-                )
-            else:
+        pending_ids = [tc.id for tc in message.tool_calls]
+        answered: set[str] = set()
+        try:
+            for tool_call in message.tool_calls:
+                name = tool_call.function.name
                 try:
-                    result = mcp_client.call_tool(name, arguments)
-                    result_text = result.text or "(no output)"
-                    on_step(
+                    arguments = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+
+                result_text = "(no output)"
+                try:
+                    if name == "set_active_schema":
+                        # Client-side tool: update active-schema state.
+                        db = arguments.get("database")
+                        sc = arguments.get("schema")
+                        if db and sc and apply_active_schema is not None:
+                            result_text = apply_active_schema(db, sc)
+                        else:
+                            result_text = (
+                                "Need both 'database' and 'schema' to set context."
+                            )
+                        try:
+                            on_step(
+                                {
+                                    "tool": "set_active_schema",
+                                    "arguments": arguments,
+                                }
+                            )
+                        except Exception:  # noqa: BLE001 - UI must not break pairing
+                            pass
+                    elif name == "display_chart":
+                        # Client-side tool: render a chart in the UI.
+                        point_count = len(arguments.get("data") or [])
+                        try:
+                            on_step(
+                                {
+                                    "tool": "display_chart",
+                                    "arguments": {
+                                        k: v
+                                        for k, v in arguments.items()
+                                        if k != "data"
+                                    },
+                                    "chart": arguments,
+                                }
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass
+                        result_text = (
+                            f"Chart ('{arguments.get('chart_type')}') rendered "
+                            f"in the UI with {point_count} data point(s)."
+                        )
+                    else:
+                        try:
+                            result = mcp_client.call_tool(name, arguments)
+                            result_text = result.text or "(no output)"
+                            try:
+                                on_step(
+                                    {
+                                        "tool": name,
+                                        "arguments": arguments,
+                                        "text": result.text,
+                                        "rows": result.rows,
+                                    }
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                        except Exception as exc:  # noqa: BLE001
+                            result_text = f"Tool call failed: {exc}"
+                            try:
+                                on_step(
+                                    {
+                                        "tool": name,
+                                        "arguments": arguments,
+                                        "error": str(exc),
+                                    }
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                finally:
+                    messages.append(
                         {
-                            "tool": name,
-                            "arguments": arguments,
-                            "text": result.text,
-                            "rows": result.rows,
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": _truncate_for_model(result_text),
                         }
                     )
-                except Exception as exc:  # noqa: BLE001 - report failures to model
-                    result_text = f"Tool call failed: {exc}"
-                    on_step({"tool": name, "arguments": arguments, "error": str(exc)})
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": _truncate_for_model(result_text),
-                }
-            )
+                    answered.add(tool_call.id)
+        finally:
+            # If the loop aborted mid-batch, still close out every tool_call_id.
+            for tid in pending_ids:
+                if tid in answered:
+                    continue
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tid,
+                        "content": (
+                            "[tool result missing — tool loop interrupted]"
+                        ),
+                    }
+                )
+                answered.add(tid)
 
     messages.append(
         {

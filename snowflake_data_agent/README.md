@@ -20,7 +20,7 @@ can answer. There is no multi-agent planner/executor graph.
                              ▼
   ┌─ Streamlit UI (app.py) ──────────────────────────────┐
   │  Chat  ·  charts  ·  sidebar (connection + last-turn │
-  │  eval)                                               │
+  │  eval). Each browser = own session + MCP connection. │
   └──────────────────────────┬───────────────────────────┘
                              │ user question
                              ▼
@@ -226,6 +226,10 @@ retrieval). **Execution efficiency** scores process quality (lean tool use).
 
 ## Notes
 
+- **Concurrent users:** each browser login is an isolated Streamlit session
+  (own chat, active schema, MCP subprocess). Logging out closes **only that**
+  session's Snowflake connection — other users keep working. All sessions still
+  share the same MCP service account from `.env` (warehouse quotas apply).
 - The agent is restricted to **read-only** exploration; it issues `SELECT`
   queries only and adds `LIMIT` clauses to avoid pulling huge result sets.
 - **Charts**: ask for a chart/graph/pie/plot and the agent queries the data,
