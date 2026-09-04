@@ -21,7 +21,7 @@ load_dotenv()
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 # Max model<->tool round-trips per user turn. Each round can issue several tool
 # calls in parallel, so a thorough multi-stage exploration needs headroom.
-MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "18"))
+MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "28"))
 
 # Token/size guardrails to keep requests under the model's context limit.
 # Roughly 4 characters per token.
@@ -33,6 +33,9 @@ MAX_AGENT_STEPS = int(os.getenv("MAX_AGENT_STEPS", "18"))
 #   the oldest tool outputs within the current turn.
 MAX_TOOL_RESULT_CHARS = int(os.getenv("MAX_TOOL_RESULT_CHARS", "10000"))
 MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "120000"))  # ~30k tokens
+# Per OpenAI request timeout. After many tool results the next model call can
+# hang a long time; fail over to a no-tools wrap-up instead of looking stuck.
+OPENAI_TIMEOUT_SEC = float(os.getenv("OPENAI_TIMEOUT_SEC", "90"))
 
 # The MCP server requires *some* default schema to connect. When the user does
 # not pin one, fall back to INFORMATION_SCHEMA (present in every database) so the
@@ -230,9 +233,18 @@ format-mismatches, so a wrong format makes everything NULL. If the parsed \
 non-null rate is unexpectedly low, your FORMAT is wrong (not the data) — \
 re-sample, try another format, and only report genuine unparseable values once \
 the format is confirmed correct.
-- If a query errors, read the message, explain the likely cause (wrong object, \
-insufficient privileges, suspended warehouse, type mismatch), and adjust — do \
-NOT repeatedly retry the same failing query.
+- SQL ERROR RECOVERY (MANDATORY IN THE SAME TURN). When read_query fails, do \
+NOT give a final answer yet and do NOT retry the identical SQL. Instead:
+  1. Read the error carefully (invalid identifier / object does not exist / \
+type mismatch / ambiguous column are the common ones).
+  2. Fix the root cause: call describe_table (or INFORMATION_SCHEMA.COLUMNS) \
+for the table, then write a NEW static query using ONLY exact column names \
+from that describe (e.g. POSTING_DATE not POSTINGDATE if that is what exists).
+  3. Call read_query again with the corrected SQL in this same turn.
+  4. After at most 2–3 distinct corrected attempts, if it still fails, tell \
+the user what failed and list the real columns you found.
+  A first-try SQL compilation error is incomplete work — recover before you \
+finish.
 """
 
 
@@ -317,6 +329,76 @@ def load_mcp_creds_from_env() -> dict[str, str]:
         "schema": (os.getenv("SNOWFLAKE_SCHEMA") or "").strip(),
         "private_key_pwd": os.getenv("SNOWFLAKE_PRIVATE_KEY_PWD") or "",
     }
+
+
+def validate_snowflake_password_login(
+    username: str,
+    password: str,
+    *,
+    mfa_passcode: str = "",
+) -> None:
+    """Authenticate a UI user/password against Snowflake (password auth).
+
+    Uses ``SNOWFLAKE_ACCOUNT`` (and optional warehouse/database/role) from
+    ``.env``. When the account requires TOTP MFA, pass the current code as
+    ``mfa_passcode`` (sent to the connector as ``passcode``). Raises
+    ``ValueError`` when credentials are rejected. Does **not** replace the MCP
+    service account — that still uses key-pair auth.
+    """
+    import snowflake.connector
+    from snowflake.connector import Error as SnowflakeError
+
+    account = (os.getenv("SNOWFLAKE_ACCOUNT") or "").strip()
+    if not account:
+        raise ValueError(
+            "SNOWFLAKE_ACCOUNT is missing in `.env` (required to validate login)."
+        )
+
+    conn_kwargs: dict[str, Any] = {
+        "account": account,
+        "user": username.strip(),
+        "password": password,
+        "authenticator": "snowflake",
+        "client_session_keep_alive": False,
+    }
+    passcode = (mfa_passcode or "").strip()
+    if passcode:
+        # Duo / TOTP MFA: Snowflake expects the one-time code separately.
+        conn_kwargs["passcode"] = passcode
+
+    warehouse = (os.getenv("SNOWFLAKE_WAREHOUSE") or "").strip()
+    database = (os.getenv("SNOWFLAKE_DATABASE") or "").strip()
+    role = (os.getenv("SNOWFLAKE_ROLE") or "").strip()
+    if warehouse:
+        conn_kwargs["warehouse"] = warehouse
+    if database:
+        conn_kwargs["database"] = database
+    if role:
+        conn_kwargs["role"] = role
+
+    try:
+        conn = snowflake.connector.connect(**conn_kwargs)
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+            finally:
+                cur.close()
+        finally:
+            conn.close()
+    except SnowflakeError as exc:
+        msg = str(exc)
+        if "MFA" in msg.upper() or "TOTP" in msg.upper() or "passcode" in msg.lower():
+            raise ValueError(
+                "Snowflake requires an MFA / TOTP code. Enter the current "
+                "code from your authenticator app (and your password), then "
+                f"try again.\n\nDetails: {exc}"
+            ) from exc
+        raise ValueError(
+            "Invalid Snowflake username or password "
+            f"(or the user cannot use password auth on this account): {exc}"
+        ) from exc
 
 
 def build_server_params(creds: dict) -> StdioServerParameters:
@@ -633,6 +715,75 @@ def _truncate_for_model(text: str, limit: int = MAX_TOOL_RESULT_CHARS) -> str:
     )
 
 
+_SQL_RECOVERY_HINT = (
+    "\n\n[AGENT RECOVERY REQUIRED] This SQL failed. Do NOT finish yet and do NOT "
+    "resubmit the same query. Call describe_table (or INFORMATION_SCHEMA.COLUMNS) "
+    "for the table, then run a NEW read_query using only exact column names from "
+    "that describe. Prefer the closest real name for any invalid identifier "
+    "(e.g. POSTING_DATE vs POSTINGDATE)."
+)
+
+
+def _looks_like_sql_failure(text: str) -> bool:
+    lowered = (text or "").lower()
+    needles = (
+        "sql compilation error",
+        "invalid identifier",
+        "does not exist",
+        "ambiguous column",
+        "database error executing",
+        "syntax error",
+        "object does not exist",
+        "unknown user-defined function",
+    )
+    return any(n in lowered for n in needles)
+
+
+def _tool_content_for_model(name: str, text: str, *, is_error: bool = False) -> str:
+    """Truncate tool output and attach SQL-recovery coaching when needed."""
+    content = _truncate_for_model(text or "(no output)")
+    if name == "read_query" and (is_error or _looks_like_sql_failure(content)):
+        content = content + _SQL_RECOVERY_HINT
+    return content
+
+
+def _force_final_answer(
+    client: openai.OpenAI,
+    *,
+    model: str,
+    messages: list[dict],
+    reason: str,
+) -> str:
+    """Ask the model to wrap up from existing tool evidence (no more tools)."""
+    wrap_messages = trim_messages(
+        list(messages)
+        + [
+            {
+                "role": "user",
+                "content": (
+                    f"[SYSTEM WRAP-UP: {reason}] Stop exploring. Using only the "
+                    "tool results already in this conversation, write the best "
+                    "final answer you can now — executive summary, key findings, "
+                    "data-quality notes, and recommended next steps. Do not call "
+                    "tools."
+                ),
+            }
+        ]
+    )
+    response = client.chat.completions.create(
+        model=model,
+        messages=wrap_messages,
+        temperature=0,
+        timeout=OPENAI_TIMEOUT_SEC,
+    )
+    content = response.choices[0].message.content or (
+        "I gathered tool results but timed out while composing the final answer. "
+        "Please ask a narrower follow-up."
+    )
+    messages.append({"role": "assistant", "content": content})
+    return content
+
+
 def run_agent(
     client: openai.OpenAI,
     mcp_client: SnowflakeMCPClient,
@@ -640,6 +791,7 @@ def run_agent(
     messages: list[dict],
     on_step,
     apply_active_schema=None,
+    on_progress=None,
 ) -> str:
     """Run the tool-calling loop until the model produces a final answer.
 
@@ -649,23 +801,78 @@ def run_agent(
     ``apply_active_schema(database, schema) -> str`` updates the active-schema
     state and returns a confirmation string (and is expected to update the
     system message in ``messages`` in place).
+    ``on_progress`` (optional) receives a small status dict each round/tool so
+    UIs can show live progress during long deep-dives.
     Returns the final assistant text.
     """
     tools = mcp_client.openai_tools() + [SET_ACTIVE_SCHEMA_TOOL, DISPLAY_CHART_TOOL]
 
-    for _ in range(MAX_AGENT_STEPS):
-        response = client.chat.completions.create(
-            model=model,
-            messages=trim_messages(messages),
-            tools=tools,
-            temperature=0,
+    def _progress(**kwargs: Any) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(kwargs)
+        except Exception:  # noqa: BLE001 - progress must never break the agent
+            pass
+
+    for round_idx in range(MAX_AGENT_STEPS):
+        force_wrap = round_idx >= MAX_AGENT_STEPS - 1
+        _progress(
+            phase="forcing_summary" if force_wrap else "waiting_on_model",
+            round=round_idx + 1,
+            max_rounds=MAX_AGENT_STEPS,
         )
+        create_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": trim_messages(messages),
+            "temperature": 0,
+            "timeout": OPENAI_TIMEOUT_SEC,
+        }
+        if force_wrap:
+            # Last budgeted round: forbid more tools so we always produce text.
+            create_kwargs["tools"] = tools
+            create_kwargs["tool_choice"] = "none"
+        else:
+            create_kwargs["tools"] = tools
+
+        try:
+            response = client.chat.completions.create(**create_kwargs)
+        except (
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.RateLimitError,
+        ) as exc:
+            _progress(
+                phase="model_timeout",
+                round=round_idx + 1,
+                max_rounds=MAX_AGENT_STEPS,
+                error=str(exc)[:240],
+            )
+            return _force_final_answer(
+                client,
+                model=model,
+                messages=messages,
+                reason=f"model call failed ({type(exc).__name__})",
+            )
+
         message = response.choices[0].message
 
         if not message.tool_calls:
             content = message.content or ""
             messages.append({"role": "assistant", "content": content})
+            _progress(
+                phase="done",
+                round=round_idx + 1,
+                max_rounds=MAX_AGENT_STEPS,
+            )
             return content
+
+        _progress(
+            phase="running_tools",
+            round=round_idx + 1,
+            max_rounds=MAX_AGENT_STEPS,
+            tool_batch=len(message.tool_calls),
+        )
 
         # Record the assistant turn that requested tool calls.
         messages.append(
@@ -742,6 +949,7 @@ def run_agent(
                         try:
                             result = mcp_client.call_tool(name, arguments)
                             result_text = result.text or "(no output)"
+                            is_error = bool(getattr(result, "is_error", False))
                             try:
                                 on_step(
                                     {
@@ -749,10 +957,21 @@ def run_agent(
                                         "arguments": arguments,
                                         "text": result.text,
                                         "rows": result.rows,
+                                        **(
+                                            {"error": result_text}
+                                            if is_error
+                                            or _looks_like_sql_failure(
+                                                result_text
+                                            )
+                                            else {}
+                                        ),
                                     }
                                 )
                             except Exception:  # noqa: BLE001
                                 pass
+                            result_text = _tool_content_for_model(
+                                name, result_text, is_error=is_error
+                            )
                         except Exception as exc:  # noqa: BLE001
                             result_text = f"Tool call failed: {exc}"
                             try:
@@ -765,12 +984,20 @@ def run_agent(
                                 )
                             except Exception:  # noqa: BLE001
                                 pass
+                            result_text = _tool_content_for_model(
+                                name, result_text, is_error=True
+                            )
                 finally:
+                    if name in ("set_active_schema", "display_chart"):
+                        tool_content = _truncate_for_model(result_text)
+                    else:
+                        # MCP paths already ran _tool_content_for_model above.
+                        tool_content = result_text
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
-                            "content": _truncate_for_model(result_text),
+                            "content": tool_content,
                         }
                     )
                     answered.add(tool_call.id)

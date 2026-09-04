@@ -13,8 +13,8 @@ can answer. There is no multi-agent planner/executor graph.
 
 ```
   ┌─ Login (app.py) ─────────────────────────────────────┐
-  │  Username / password (UI only)                       │
-  │  MCP service account loaded from .env (key-pair)     │
+  │  Snowflake user/password validated against Snowflake │
+  │  MCP service account still loaded from .env (JWT)    │
   └──────────────────────────┬───────────────────────────┘
                              │
                              ▼
@@ -109,9 +109,11 @@ cp .env.example .env
 The UI requires `OPENAI_API_KEY`. Default chat model is `gpt-4o-mini`
 (override with `OPENAI_MODEL`).
 
-The Streamlit **login page** asks for a username and password (entered by the
-user; not configured in `.env`). Warehouse access uses a separate **MCP service
-account** from `.env` (key-pair / JWT):
+The Streamlit **login page** asks for a Snowflake **username and password**
+(and an optional **MFA / TOTP** code) and validates them against Snowflake
+using `SNOWFLAKE_ACCOUNT` from `.env`. After a successful login, warehouse
+queries still run through a separate **MCP service account** from `.env`
+(key-pair / JWT):
 
 ```bash
 SNOWFLAKE_ACCOUNT="..."
