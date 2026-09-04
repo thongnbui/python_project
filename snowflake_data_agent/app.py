@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Optional
 
 import altair as alt
@@ -30,7 +31,9 @@ from agent_core import (
     build_system_prompt,
     connection_cache_key,
     load_mcp_creds_from_env,
+    repair_tool_message_history,
     run_agent,
+    validate_snowflake_password_login,
 )
 from mcp_client import SnowflakeMCPClient
 
@@ -56,6 +59,8 @@ _SESSION_KEYS = (
     "last_eval",
     "last_eval_payload",
     "auto_judge",
+    "pending_prompts",
+    "agent_busy",
 )
 
 
@@ -114,6 +119,265 @@ def clear_login_session() -> None:
         st.session_state.pop(key, None)
 
 
+def enqueue_user_prompt(text: str) -> None:
+    """Queue a user message for the next agent turn on this session."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return
+    pending = st.session_state.setdefault("pending_prompts", [])
+    pending.append(cleaned)
+
+
+def _apply_agent_result(result: dict[str, Any], creds: dict) -> None:
+    """Merge a finished agent turn into this session's chat state."""
+    st.session_state.openai_messages = result["messages"]
+    if result.get("active_schema") is not None:
+        st.session_state.active_schema = result["active_schema"]
+    elif "active_schema" in result:
+        st.session_state.active_schema = result["active_schema"]
+
+    st.session_state.chat.append(
+        {
+            "role": "assistant",
+            "content": result["answer"],
+            "steps": result.get("steps") or [],
+        }
+    )
+
+    prior_steps = prior_chat_tool_steps(st.session_state.chat)
+    steps = result.get("steps") or []
+    prompt = result["prompt"]
+    answer = result["answer"]
+    oai_client = openai.OpenAI()
+    try:
+        judge = bool(st.session_state.get("auto_judge", False))
+        st.session_state.last_eval = score_last_turn(
+            client=oai_client,
+            question=prompt,
+            answer=answer,
+            steps=steps,
+            creds=creds,
+            active=st.session_state.active_schema,
+            judge=judge,
+            prior_steps=prior_steps,
+        )
+        st.session_state.last_eval_payload = {
+            "question": prompt,
+            "answer": answer,
+            "steps": steps,
+            "prior_steps": prior_steps,
+            "creds": creds,
+            "active": st.session_state.active_schema,
+        }
+    except Exception as exc:  # noqa: BLE001
+        st.session_state.last_eval = {
+            "expectations": {
+                "efficiency": {
+                    "tool_call_count": len(steps),
+                    "error_count": sum(1 for s in steps if s.get("error")),
+                    "chart_count": sum(1 for s in steps if "chart" in s),
+                    "unique_tools": sorted(
+                        {s.get("tool") for s in steps if s.get("tool")}
+                    ),
+                }
+            },
+            "prior_tool_steps": len(prior_steps),
+            "error": str(exc),
+        }
+        st.session_state.last_eval_payload = {
+            "question": prompt,
+            "answer": answer,
+            "steps": steps,
+            "prior_steps": prior_steps,
+            "creds": creds,
+            "active": st.session_state.active_schema,
+        }
+
+
+def _format_agent_progress(progress: dict[str, Any]) -> str:
+    """Human-readable status line for an in-flight agent turn."""
+    phase = progress.get("phase") or "working"
+    tool_count = int(progress.get("tool_count") or 0)
+    last_tool = progress.get("last_tool")
+    round_n = progress.get("round")
+    max_rounds = progress.get("max_rounds")
+    started = progress.get("started_at")
+    elapsed = f"{max(0, int(time.time() - started))}s" if started else "?"
+
+    if phase == "waiting_on_model":
+        phase_label = "Waiting on the model"
+    elif phase == "forcing_summary":
+        phase_label = "Writing final summary"
+    elif phase == "model_timeout":
+        phase_label = "Model timed out — wrapping up"
+    elif phase == "running_tools":
+        phase_label = "Running Snowflake tools"
+    elif phase == "starting":
+        phase_label = "Starting"
+    elif phase == "done":
+        phase_label = "Finishing"
+    elif phase == "error":
+        phase_label = "Error"
+    else:
+        phase_label = "Working"
+
+    parts = [f"{phase_label}…", f"{elapsed} elapsed", f"{tool_count} tool calls"]
+    if round_n and max_rounds:
+        parts.append(f"model round {round_n}/{max_rounds}")
+    if last_tool:
+        parts.append(f"last: {last_tool}")
+    return " · ".join(parts)
+
+
+def pump_message_queue(
+    *,
+    creds: dict,
+    mcp_client: SnowflakeMCPClient,
+    model: str,
+) -> None:
+    """Drain the prompt queue with a synchronous agent turn on this script run.
+
+    Runs on the Streamlit thread (not a worker). Chat input is disabled while
+    ``agent_busy`` so a new message cannot abort mid-reply — that abort path
+    is what looked like a "stuck" agent after the background-thread change.
+    """
+    if "pending_prompts" not in st.session_state:
+        st.session_state.pending_prompts = []
+
+    pending: list[str] = st.session_state.pending_prompts
+    if not pending:
+        st.session_state.agent_busy = False
+        return
+
+    # Rerun once with input disabled before blocking on the model/tools.
+    if not st.session_state.get("agent_busy"):
+        st.session_state.agent_busy = True
+        st.rerun()
+
+    prompt = pending.pop(0)
+    # Refresh system prompt each turn so prompt/policy updates apply without
+    # requiring Clear conversation.
+    st.session_state.openai_messages[0]["content"] = build_system_prompt(
+        creds, st.session_state.active_schema
+    )
+    st.session_state.chat.append({"role": "user", "content": prompt})
+    st.session_state.openai_messages.append({"role": "user", "content": prompt})
+    repair_tool_message_history(st.session_state.openai_messages)
+
+    messages = st.session_state.openai_messages
+    steps: list[dict] = []
+    progress: dict[str, Any] = {
+        "phase": "starting",
+        "tool_count": 0,
+        "last_tool": None,
+        "started_at": time.time(),
+        "updated_at": time.time(),
+    }
+
+    def _apply_active(database: str, schema: str) -> str:
+        st.session_state.active_schema = {
+            "database": database,
+            "schema": schema,
+        }
+        messages[0]["content"] = build_system_prompt(
+            creds, st.session_state.active_schema
+        )
+        return f"Active context set to {database}.{schema}."
+
+    def _on_progress(update: dict[str, Any]) -> None:
+        progress.update(update)
+        progress["updated_at"] = time.time()
+        try:
+            status.update(
+                label=_format_agent_progress(progress),
+                state="running",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _on_step(step: dict[str, Any]) -> None:
+        steps.append(step)
+        progress["tool_count"] = len(steps)
+        if step.get("tool"):
+            progress["last_tool"] = step.get("tool")
+        if step.get("error"):
+            progress["last_error"] = str(step.get("error"))[:240]
+        progress["updated_at"] = time.time()
+        try:
+            status.update(
+                label=_format_agent_progress(progress),
+                state="running",
+            )
+            if "chart" in step:
+                render_step(step)
+        except Exception:  # noqa: BLE001
+            pass
+
+    with st.chat_message("assistant"):
+        status = st.status(_format_agent_progress(progress), expanded=True)
+        try:
+            answer = run_agent(
+                client=openai.OpenAI(),
+                mcp_client=mcp_client,
+                model=model,
+                messages=messages,
+                on_step=_on_step,
+                apply_active_schema=_apply_active,
+                on_progress=_on_progress,
+            )
+            status.update(label="Done", state="complete")
+            result = {
+                "ok": True,
+                "prompt": prompt,
+                "answer": answer,
+                "steps": steps,
+                "messages": messages,
+                "active_schema": st.session_state.active_schema,
+            }
+        except openai.RateLimitError as exc:
+            status.update(label="Rate limited", state="error")
+            answer = (
+                "⚠️ OpenAI rate limit hit. Your org's tokens-per-minute (TPM) "
+                "limit was exceeded. Try switching to **gpt-4o-mini** in the "
+                "sidebar (higher TPM), ask a narrower question, or wait a minute "
+                f"and retry.\n\n```\n{exc}\n```"
+            )
+            repair_tool_message_history(messages)
+            result = {
+                "ok": False,
+                "prompt": prompt,
+                "answer": answer,
+                "steps": steps,
+                "messages": messages,
+                "active_schema": st.session_state.active_schema,
+                "error_kind": "rate_limit",
+            }
+        except Exception as exc:  # noqa: BLE001
+            status.update(label="Error", state="error")
+            answer = (
+                f"⚠️ Something went wrong while answering:\n\n```\n{exc}\n```"
+            )
+            repair_tool_message_history(messages)
+            result = {
+                "ok": False,
+                "prompt": prompt,
+                "answer": answer,
+                "steps": steps,
+                "messages": messages,
+                "active_schema": st.session_state.active_schema,
+                "error_kind": "error",
+            }
+
+        _apply_agent_result(result, creds)
+        render_assistant_response(result["answer"])
+
+    if pending:
+        st.rerun()
+    else:
+        st.session_state.agent_busy = False
+        st.rerun()
+
+
 def get_session_mcp_client(creds: dict) -> SnowflakeMCPClient:
     """Return a Snowflake MCP client owned by this browser session.
 
@@ -139,14 +403,20 @@ def render_login() -> None:
     st.title("❄️ Snowflake Data Explorer")
     st.caption(
         f"by [Open Issue]({OPENISSUE_SITE_URL}) — *{OPENISSUE_TAGLINE}*  \n"
-        "Sign in to explore Snowflake data. Warehouse access uses the MCP "
-        "service account from `.env` (key-pair); this login is separate."
+        "Sign in with your **Snowflake username and password**. Data access "
+        "then runs through the MCP service account configured in `.env` "
+        "(key-pair)."
     )
 
     with st.form("login_form"):
         st.subheader("Sign in")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
+        username = st.text_input("Snowflake username")
+        password = st.text_input("Snowflake password", type="password")
+        mfa_passcode = st.text_input(
+            "MFA / TOTP code (if required)",
+            help="Current code from your authenticator app when Snowflake "
+            "requires MFA. Leave blank if your user does not use TOTP.",
+        )
         submitted = st.form_submit_button("🔐 Sign in", width="stretch")
 
     if not submitted:
@@ -157,9 +427,18 @@ def render_login() -> None:
         return
 
     try:
+        with st.spinner("Validating Snowflake credentials..."):
+            validate_snowflake_password_login(
+                username.strip(),
+                password,
+                mfa_passcode=mfa_passcode.strip(),
+            )
         st.session_state.sf_creds = load_mcp_creds_from_env()
     except ValueError as exc:
         st.error(str(exc))
+        return
+    except Exception as exc:  # noqa: BLE001 - surface connector/network failures
+        st.error(f"Could not validate login against Snowflake:\n\n{exc}")
         return
 
     st.session_state.app_user = username.strip()
@@ -583,6 +862,8 @@ with st.sidebar:
         st.session_state.chat = []
         st.session_state.last_eval = None
         st.session_state.pop("last_eval_payload", None)
+        st.session_state.pending_prompts = []
+        st.session_state.agent_busy = False
         st.rerun()
 
     st.caption("Quick starts")
@@ -595,13 +876,14 @@ with st.sidebar:
             "the most substantial/interesting one to deep-dive)"
         )
     deep_dive_prompt = (
-        f"Do a thorough, end-to-end data-science deep-dive of {deep_dive_target}. "
-        "Inventory the tables and their sizes; for the most important tables, "
-        "infer the grain and profile their columns (counts, distinct values, NULL "
-        "rates, ranges, top categories); assess data quality; surface outliers "
-        "and anomalies; examine relationships and any trends over time; include "
-        "charts for the most important findings; and finish with a "
-        "severity-ranked executive summary and recommended next steps."
+        f"Do a thorough data-science deep-dive of {deep_dive_target}. "
+        "Stay efficient: inventory tables/sizes first; deep-profile only the "
+        "3–5 most important tables (grain, key columns, NULL rates, ranges, "
+        "top categories); flag clear data-quality issues/outliers; include "
+        "1–2 charts for the strongest findings; finish with a priority-ranked "
+        "executive summary and recommended next steps. Prefer parallel tool "
+        "calls, and after enough evidence WRITE THE SUMMARY — do not keep "
+        "exploring indefinitely."
     )
 
     quick_prompts = {
@@ -612,15 +894,19 @@ with st.sidebar:
         "Chart it": "Pick an interesting table, aggregate a categorical column, "
         "and show me a bar or pie chart of the result.",
     }
-    quick_choice = None
-    for label, prompt in quick_prompts.items():
-        if st.button(label, width="stretch"):
-            quick_choice = prompt
+    for label, quick_prompt in quick_prompts.items():
+        if st.button(
+            label,
+            width="stretch",
+            disabled=bool(st.session_state.get("agent_busy")),
+        ):
+            enqueue_user_prompt(quick_prompt)
+            st.rerun()
 
     render_eval_sidebar(st.session_state.last_eval)
 
 # --- Render existing conversation ----------------------------------------- #
-if not st.session_state.chat:
+if not st.session_state.chat and not st.session_state.get("pending_prompts"):
     with st.chat_message("assistant"):
         render_assistant_response(welcome_message(creds["database"]))
 
@@ -636,95 +922,20 @@ for item in st.session_state.chat:
             else:
                 st.markdown(item["content"])
 
-# --- Handle new input ------------------------------------------------------ #
-user_input = st.chat_input("Ask about your Snowflake data...")
-prompt = user_input or quick_choice
-
-if prompt:
-    st.session_state.chat.append({"role": "user", "content": prompt})
+# Prompts waiting to run (shown until the sync turn starts).
+for queued in st.session_state.get("pending_prompts") or []:
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(queued)
+        st.caption("Queued — starting next…")
 
-    st.session_state.openai_messages.append({"role": "user", "content": prompt})
-    oai_client = openai.OpenAI()
-
-    with st.chat_message("assistant"):
-        steps: list[dict] = []
-        try:
-            with st.spinner("Thinking..."):
-                answer = run_agent(
-                    client=oai_client,
-                    mcp_client=mcp_client,
-                    model=model,
-                    messages=st.session_state.openai_messages,
-                    on_step=step_recorder(steps),
-                    apply_active_schema=apply_active_schema,
-                )
-            render_assistant_response(answer)
-        except openai.RateLimitError as exc:
-            answer = (
-                "⚠️ OpenAI rate limit hit. Your org's tokens-per-minute (TPM) "
-                "limit was exceeded. Try switching to **gpt-4o-mini** in the "
-                "sidebar (higher TPM), ask a narrower question, or wait a minute "
-                f"and retry.\n\n```\n{exc}\n```"
-            )
-            st.warning(answer)
-            render_response_copy(answer)
-        except Exception as exc:  # noqa: BLE001 - keep the app alive on any error
-            answer = f"⚠️ Something went wrong while answering:\n\n```\n{exc}\n```"
-            st.error(answer)
-            render_response_copy(answer)
-
-    st.session_state.chat.append(
-        {"role": "assistant", "content": answer, "steps": steps}
-    )
-    prior_steps = prior_chat_tool_steps(st.session_state.chat)
-
-    # Always record tool stats; optionally run LLM judges (sidebar toggle).
-    try:
-        judge = bool(st.session_state.get("auto_judge", False))
-        with st.spinner(
-            "Scoring last turn..." if judge else "Recording tool stats..."
-        ):
-            st.session_state.last_eval = score_last_turn(
-                client=oai_client,
-                question=prompt,
-                answer=answer,
-                steps=steps,
-                creds=creds,
-                active=st.session_state.active_schema,
-                judge=judge,
-                prior_steps=prior_steps,
-            )
-        st.session_state.last_eval_payload = {
-            "question": prompt,
-            "answer": answer,
-            "steps": steps,
-            "prior_steps": prior_steps,
-            "creds": creds,
-            "active": st.session_state.active_schema,
-        }
-    except Exception as exc:  # noqa: BLE001 - evals must not break chat
-        st.session_state.last_eval = {
-            "expectations": {
-                "efficiency": {
-                    "tool_call_count": len(steps),
-                    "error_count": sum(1 for s in steps if s.get("error")),
-                    "chart_count": sum(1 for s in steps if "chart" in s),
-                    "unique_tools": sorted(
-                        {s.get("tool") for s in steps if s.get("tool")}
-                    ),
-                }
-            },
-            "prior_tool_steps": len(prior_steps),
-            "error": str(exc),
-        }
-        st.session_state.last_eval_payload = {
-            "question": prompt,
-            "answer": answer,
-            "steps": steps,
-            "prior_steps": prior_steps,
-            "creds": creds,
-            "active": st.session_state.active_schema,
-        }
+# --- Handle new input (disabled while a reply runs so Streamlit can't abort) --- #
+input_locked = bool(st.session_state.get("agent_busy"))
+user_input = st.chat_input(
+    "Ask about your Snowflake data...",
+    disabled=input_locked,
+)
+if user_input and not input_locked:
+    enqueue_user_prompt(user_input)
     st.rerun()
+
+pump_message_queue(creds=creds, mcp_client=mcp_client, model=model)
