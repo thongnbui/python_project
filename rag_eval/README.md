@@ -1,5 +1,24 @@
 # Building and Evaluating Advanced RAG
 
+<!-- Smaller fenced code in Cursor / VS Code markdown preview. github.com strips this block. -->
+<style>
+pre {
+  font-size: 12px;
+  line-height: 1.15;
+  margin: 0.4em 0;
+  padding: 0.5em 0.75em;
+}
+pre code,
+pre code.hljs {
+  font-size: inherit;
+  line-height: inherit;
+  display: block;
+}
+pre code > span {
+  line-height: inherit;
+}
+</style>
+
 Hands-on lessons for improving a retrieval-augmented generation pipeline past a single chunk size, then measuring whether the change helped.
 
 You build a baseline RAG app over a short career-in-AI ebook, score it with the **RAG triad**, then compare **sentence-window retrieval** and **auto-merging retrieval** on the same questions. The course is taught by Jerry Liu (LlamaIndex) and Anupam Datta (TruEra).
@@ -102,13 +121,46 @@ Two different model families show up in these notebooks. The BGE models pick whi
 
 [Beijing Academy of AI](https://huggingface.co/BAAI/bge-small-en-v1.5) bi-encoder for English dense retrieval. At index time each chunk becomes a fixed-size vector. At query time the question is embedded the same way, and the vector index returns the nearest neighbors. Query and chunk are encoded separately, so chunk vectors can be precomputed. That keeps search fast and local, but similarity is only an approximation. L3 comments mention `BAAI/bge-large-en-v1.5` as a heavier upgrade. Better embeddings can improve context relevance and groundedness indirectly because retrieval improves. They do not change the TruLens judge functions.
 
+L1 wires the embed model through `ServiceContext`. `ServiceContext` bundles the LLM, the embed model, and default chunking for every index built from it. The `local:` prefix tells LlamaIndex to load weights from Hugging Face on this machine instead of calling an embedding API.
+
+```python
+from llama_index import VectorStoreIndex, ServiceContext
+from llama_index.llms import OpenAI
+
+llm = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
+service_context = ServiceContext.from_defaults(
+    llm=llm, embed_model="local:BAAI/bge-small-en-v1.5"
+)
+index = VectorStoreIndex.from_documents([document], service_context=service_context)
+```
+
+`from_documents` chunks the text, embeds each chunk with BGE small, and stores vectors for similarity search. The same `llm` also generates answers when you call `query_engine.query`.
+
 ### `BAAI/bge-reranker-base` (reranker)
 
 [Cross-encoder](https://huggingface.co/BAAI/bge-reranker-base) that scores each query–passage pair in one forward pass. Vector search returns a wide set (`similarity_top_k` of 6 or 12). After sentence-window replacement or auto-merge, the reranker trims that list to `top_n` (2 in `utils.py`, 6 in parts of L4). Reranking costs more compute per query than bi-encoder search alone, but it is usually more accurate. The pattern here is cheap wide retrieve, then expensive narrow rerank.
 
+L3 and `utils.py` attach reranking as **postprocessors** on the query engine. Postprocessors run after vector search returns nodes and before the LLM sees them. Order matters: window replacement runs first so the reranker scores full passages, not single sentences.
+
+```python
+from llama_index.indices.postprocessor import MetadataReplacementPostProcessor
+from llama_index.indices.postprocessor import SentenceTransformerRerank
+
+postproc = MetadataReplacementPostProcessor(target_metadata_key="window")
+rerank = SentenceTransformerRerank(top_n=2, model="BAAI/bge-reranker-base")
+
+sentence_window_engine = sentence_index.as_query_engine(
+    similarity_top_k=6, node_postprocessors=[postproc, rerank]
+)
+```
+
+`similarity_top_k=6` is the wide bi-encoder retrieve step. `top_n=2` keeps only the two cross-encoder scores the reranker likes best.
+
 ### Triad scores (judges, not BGE)
 
 The quality columns on the leaderboard are LLM judgments, not embedding cosine scores. `get_prebuilt_trulens_recorder` wires Answer Relevance and Context Relevance through OpenAI `relevance_with_cot_reasons`, and Groundedness through `Groundedness(groundedness_provider=openai).groundedness_measure_with_cot_reasons`, all on `gpt-3.5-turbo` at temperature `0.1`. Generation uses the same model. Leaderboard `total_cost` counts OpenAI tokens for the query path; local BGE embed and rerank add no OpenAI line item. Judge calls are extra API usage and usually run after `query_engine.query`, so they are not in latency either. See Lesson 2 for the per-metric breakdown.
+
+`utils.py` wires the triad with `Feedback`, `TruLlama`, `OpenAI`, and `Groundedness`. The full import and `Feedback` blocks live under Lesson 1 and Lesson 2.
 
 ### Alternatives when you outgrow the course defaults
 
@@ -133,6 +185,87 @@ Why a RAG system needs both a better retriever and a way to measure it. One succ
 ### Lesson 1: Advanced RAG Pipeline
 
 **Notebook:** `L1-Advanced_RAG_Pipeline.ipynb`
+
+**Notebook code** — Cells run top to bottom: baseline RAG, TruLens on the baseline, then sentence window and auto-merge through `utils.py`, with a database reset before each pipeline so leaderboard rows stay comparable.
+
+**1. API key** — `utils.get_openai_api_key()` reads `OPENAI_API_KEY` from `.env` via `python-dotenv`. The notebooks set `openai.api_key` so both LlamaIndex and TruLens judges can call OpenAI.
+
+```python
+import utils
+import os
+import openai
+
+openai.api_key = utils.get_openai_api_key()
+```
+
+**2. Baseline index** — Load the PDF as one `Document`, attach BGE small + `gpt-3.5-turbo`, build a default chunk index, and wrap it in a query engine. This is the “direct query” pipeline with no sentence window or auto-merge.
+
+```python
+from llama_index import SimpleDirectoryReader, Document, VectorStoreIndex, ServiceContext
+from llama_index.llms import OpenAI
+
+documents = SimpleDirectoryReader(
+    input_files=["./eBook-How-to-Build-a-Career-in-AI.pdf"]
+).load_data()
+document = Document(text="\n\n".join([doc.text for doc in documents]))
+
+llm = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
+service_context = ServiceContext.from_defaults(
+    llm=llm, embed_model="local:BAAI/bge-small-en-v1.5"
+)
+index = VectorStoreIndex.from_documents([document], service_context=service_context)
+query_engine = index.as_query_engine()
+```
+
+**3. Score the baseline** — `Tru()` connects to `sqlite:///default.sqlite`. `reset_database()` clears prior runs so this leaderboard row is only the direct engine. Inside the `with tru_recorder` block, each `query` is logged; TruLens schedules triad feedbacks after the answer returns.
+
+```python
+from trulens_eval import Tru
+from utils import get_prebuilt_trulens_recorder
+
+tru = Tru()
+tru.reset_database()
+
+tru_recorder = get_prebuilt_trulens_recorder(query_engine, app_id="Direct Query Engine")
+
+with tru_recorder as recording:
+    for question in eval_questions:
+        response = query_engine.query(question)
+```
+
+**4. Advanced engines via `utils.py`** — L1 does not implement sentence window or auto-merge in the notebook. It imports builders from `utils.py`, gives each engine a distinct `app_id`, and calls `tru.reset_database()` again before each new engine so `get_leaderboard` shows one row per pipeline when you compare them.
+
+```python
+from utils import (
+    build_sentence_window_index,
+    get_sentence_window_query_engine,
+    build_automerging_index,
+    get_automerging_query_engine,
+)
+
+sentence_index = build_sentence_window_index(
+    document,
+    llm,
+    embed_model="local:BAAI/bge-small-en-v1.5",
+    save_dir="sentence_index",
+)
+sentence_window_engine = get_sentence_window_query_engine(sentence_index)
+
+tru_recorder_sentence_window = get_prebuilt_trulens_recorder(
+    sentence_window_engine,
+    app_id="Sentence Window Query Engine",
+)
+
+merging_index = build_automerging_index(
+    document,
+    llm,
+    embed_model="local:BAAI/bge-small-en-v1.5",
+    save_dir="merging_index",
+)
+automerging_engine = get_automerging_query_engine(merging_index)
+```
+
+Each `build_*` call may persist under `sentence_index/` or `merging_index/` so a re-run can `load_index_from_storage` instead of re-embedding the ebook.
 
 The baseline engine is this pipeline. Ingestion turns documents into chunks, embeds them, and stores the vectors. Retrieval embeds the query, takes the top matches from the index, and sends those chunks plus the query to the model.
 
@@ -162,6 +295,46 @@ Direct query and sentence window tie on answer relevance at 0.95. Auto-merge is 
 - **Sentence window:** `SentenceWindowNodeParser` with `window_size=3` (three sentences on each side). The query engine retrieves 6 sentences, replaces each with its window, then reranks to 2 with `BAAI/bge-reranker-base`.
 - **Auto-merge:** `HierarchicalNodeParser` chunk sizes `[2048, 512, 128]`. Only the 128-token leaves are embedded. `AutoMergingRetriever` replaces a cluster of leaves with their parent, then reranks the top 12 hits down to 2.
 
+L1 calls those builders through `utils.py`. The triad recorder in that file matches:
+
+- **`Feedback`** wraps a scoring function plus which fields from each trace to pass in (`.on_input_output()`, `.on(...)`, etc.).
+- **Answer relevance** compares question text to final answer only; retrieved chunks are not inputs.
+- **Context relevance** runs once per retrieved node text, then `np.mean` aggregates chunk scores (L1 uses `relevance_with_cot_reasons`, not L2’s `qs_relevance_with_cot_reasons`).
+- **Groundedness** splits the answer into sentences and scores support against all source nodes, keeping each sentence’s max score before averaging.
+- **`TruLlama`** instruments `query_engine.query` and attaches the feedback list under the given `app_id`.
+
+```python
+from trulens_eval import Feedback, TruLlama, OpenAI
+from trulens_eval.feedback import Groundedness
+import numpy as np
+
+openai = OpenAI()
+
+qa_relevance = (
+    Feedback(openai.relevance_with_cot_reasons, name="Answer Relevance")
+    .on_input_output()
+)
+
+qs_relevance = (
+    Feedback(openai.relevance_with_cot_reasons, name="Context Relevance")
+    .on_input()
+    .on(TruLlama.select_source_nodes().node.text)
+    .aggregate(np.mean)
+)
+
+grounded = Groundedness(groundedness_provider=openai)
+groundedness = (
+    Feedback(grounded.groundedness_measure_with_cot_reasons, name="Groundedness")
+    .on(TruLlama.select_source_nodes().node.text)
+    .on_output()
+    .aggregate(grounded.grounded_statements_aggregator)
+)
+
+tru_recorder = TruLlama(query_engine, app_id=app_id, feedbacks=[qa_relevance, qs_relevance, groundedness])
+```
+
+L1 never edits this block; it only calls `get_prebuilt_trulens_recorder`. Lesson 2 rewrites the same ideas explicitly with `qs_relevance_with_cot_reasons` for context relevance.
+
 **Focus:** Three pipelines, one question set. L1 keeps the feedback definitions and both index builders inside `utils.py`. L2 writes the triad in the notebook. L3 and L4 rebuild the retrievers.
 
 ---
@@ -169,6 +342,94 @@ Direct query and sentence window tie on answer relevance at 0.95. Auto-merge is 
 ### Lesson 2: RAG Triad of Metrics
 
 **Notebook:** `L2-RAG_Triad_of_metrics.ipynb`
+
+**Notebook code** — You reuse the sentence-window engine from `utils.py`, then define every `Feedback` in the notebook so you can see how TruLens attaches judges to retrieved nodes and answers.
+
+**1. Setup and empty TruLens DB** — Same API key pattern as L1. L2 also silences noisy library warnings and resets SQLite so this lesson’s `App_1` run starts clean.
+
+```python
+import warnings
+
+warnings.filterwarnings("ignore")
+
+import utils
+import openai
+
+openai.api_key = utils.get_openai_api_key()
+
+from trulens_eval import Tru
+
+tru = Tru()
+tru.reset_database()
+```
+
+**2. Sentence-window query engine** — L2 scores one fixed retriever while you learn the metrics. It rebuilds the ebook document and uses `utils.py` for the index and query engine (window size 3, rerank to 2) so the notebook cells focus on feedback definitions, not index plumbing.
+
+```python
+from utils import build_sentence_window_index, get_sentence_window_query_engine
+from llama_index import SimpleDirectoryReader, Document
+from llama_index.llms import OpenAI
+
+documents = SimpleDirectoryReader(
+    input_files=["./eBook-How-to-Build-a-Career-in-AI.pdf"]
+).load_data()
+document = Document(text="\n\n".join([doc.text for doc in documents]))
+
+llm = OpenAI(model="gpt-3.5-turbo", temperature=0.1)
+sentence_index = build_sentence_window_index(
+    document,
+    llm,
+    embed_model="local:BAAI/bge-small-en-v1.5",
+    save_dir="sentence_index",
+)
+sentence_window_engine = get_sentence_window_query_engine(sentence_index)
+```
+
+**3. Define and run the triad** — `nest_asyncio` lets TruLens run async judge calls inside Jupyter. `fOpenAI` is TruLens’s feedback provider (not the raw `openai` package). `context_selection` is a selector that pulls retrieved node text off each recorded query. L2’s context metric uses `qs_relevance_with_cot_reasons`: the chunk is treated as a **statement**, not as a pseudo-response. The eval loop matches L1: one `with tru_recorder` block over `eval_questions.txt`.
+
+```python
+import nest_asyncio
+
+nest_asyncio.apply()
+
+from trulens_eval import OpenAI as fOpenAI, Feedback, TruLlama
+from trulens_eval.feedback import Groundedness
+import numpy as np
+
+provider = fOpenAI()
+context_selection = TruLlama.select_source_nodes().node.text
+
+f_qa_relevance = Feedback(
+    provider.relevance_with_cot_reasons, name="Answer Relevance"
+).on_input_output()
+
+f_qs_relevance = (
+    Feedback(provider.qs_relevance_with_cot_reasons, name="Context Relevance")
+    .on_input()
+    .on(context_selection)
+    .aggregate(np.mean)
+)
+
+grounded = Groundedness(groundedness_provider=provider)
+f_groundedness = (
+    Feedback(grounded.groundedness_measure_with_cot_reasons, name="Groundedness")
+    .on(context_selection)
+    .on_output()
+    .aggregate(grounded.grounded_statements_aggregator)
+)
+
+tru_recorder = TruLlama(
+    sentence_window_engine,
+    app_id="App_1",
+    feedbacks=[f_qa_relevance, f_qs_relevance, f_groundedness],
+)
+
+with tru_recorder as recording:
+    for question in eval_questions:
+        response = sentence_window_engine.query(question)
+```
+
+After the loop, call `tru.get_leaderboard(app_ids=[])` and optionally `tru.get_records_and_feedback(app_ids=[])` to inspect per-question scores and `cot_reasons` text from the judges.
 
 The three checks sit on the edges between the question, the retrieved text, and the answer:
 
@@ -213,6 +474,82 @@ This is a sentence-window run only. Its context-relevance judge is the question-
 ### Lesson 3: Sentence-Window Retrieval
 
 **Notebook:** `L3-Sentence_window_retrieval.ipynb`
+
+**Notebook code** — Early cells demo the parser on short strings; later cells build the full ebook index, copy helpers from `utils.py` with a configurable `sentence_window_size`, and eval both window sizes against `generated_questions.text`.
+
+**1. Setup and document load** — Same env and warning pattern as L2/L4. You load the career ebook the same way as earlier lessons; L3 then replaces `utils.build_sentence_window_index` with explicit parser and postprocessor code.
+
+```python
+import warnings
+
+warnings.filterwarnings("ignore")
+
+import utils
+import openai
+
+openai.api_key = utils.get_openai_api_key()
+
+from llama_index import SimpleDirectoryReader, Document
+from llama_index.llms import OpenAI
+```
+
+**2. Sentence-window parser** — Each sentence becomes its own node. `window_size=3` stores up to three sentences on **each side** in metadata key `window`. `original_text` keeps the single sentence for debugging. Toy cells in the notebook print `nodes[i].text` versus `nodes[i].metadata["window"]`.
+
+```python
+from llama_index.node_parser import SentenceWindowNodeParser
+
+node_parser = SentenceWindowNodeParser.from_defaults(
+    window_size=3,
+    window_metadata_key="window",
+    original_text_metadata_key="original_text",
+)
+```
+
+**3. Index + query engine** — `node_parser` is part of `ServiceContext`, so indexing embeds **sentences**, not paragraphs. After retrieval, `MetadataReplacementPostProcessor` overwrites each node’s text with its `window` metadata. The reranker then reads those wider passages when scoring query–chunk pairs.
+
+```python
+from llama_index import ServiceContext, VectorStoreIndex
+from llama_index.indices.postprocessor import MetadataReplacementPostProcessor
+from llama_index.indices.postprocessor import SentenceTransformerRerank
+
+sentence_context = ServiceContext.from_defaults(
+    llm=llm,
+    embed_model="local:BAAI/bge-small-en-v1.5",
+    node_parser=node_parser,
+)
+sentence_index = VectorStoreIndex.from_documents([document], service_context=sentence_context)
+
+postproc = MetadataReplacementPostProcessor(target_metadata_key="window")
+rerank = SentenceTransformerRerank(top_n=2, model="BAAI/bge-reranker-base")
+
+sentence_window_engine = sentence_index.as_query_engine(
+    similarity_top_k=6, node_postprocessors=[postproc, rerank]
+)
+```
+
+**4. Compare window sizes 1 and 3** — The notebook copies the `build_sentence_window_index` / `get_sentence_window_query_engine` helpers locally so you can pass `sentence_window_size` and `save_dir` (`sentence_index_1` vs `sentence_index_3`). Eval uses `get_prebuilt_trulens_recorder` from `utils.py` (L1-style context relevance). `run_evals` is a thin loop: each question runs inside the recorder context so traces and feedbacks attach to the right `app_id`. `get_leaderboard` averages all apps still in the DB (both window sizes after a single `reset_database` before size 1).
+
+```python
+from trulens_eval import Tru
+from utils import get_prebuilt_trulens_recorder
+
+Tru().reset_database()
+
+tru_recorder_1 = get_prebuilt_trulens_recorder(
+    sentence_window_engine_1,
+    app_id="sentence window engine 1",
+)
+
+def run_evals(eval_questions, tru_recorder, query_engine):
+    for question in eval_questions:
+        with tru_recorder as recording:
+            response = query_engine.query(question)
+
+run_evals(eval_questions, tru_recorder_1, sentence_window_engine_1)
+
+tru = Tru()
+tru.get_leaderboard(app_ids=[])
+```
 
 Sentence-window retrieval separates the text you search from the text you give the model:
 
@@ -273,6 +610,99 @@ This leaderboard has no Groundedness column. Window size 3 had not finished Answ
 ### Lesson 4: Auto-Merging Retrieval
 
 **Notebook:** `L4-Auto-merging_Retrieval.ipynb`
+
+**Notebook code** — Build the hierarchy, try a demo query engine, define `get_automerging_query_engine` for eval, then compare two-layer and three-layer chunk trees as `app_0` and `app_1`.
+
+**1. Setup** — API key and imports for loading the same ebook document as L1–L3.
+
+```python
+import warnings
+
+warnings.filterwarnings("ignore")
+
+import utils
+import openai
+
+openai.api_key = utils.get_openai_api_key()
+
+from llama_index import SimpleDirectoryReader, Document
+```
+
+**2. Hierarchical index on leaves** — `chunk_sizes=[2048, 512, 128]` builds a three-level tree. Only `leaf_nodes` are embedded into the vector index. `storage_context.docstore.add_documents(nodes)` keeps **all** hierarchy levels in the docstore so `AutoMergingRetriever` can swap a cluster of leaves for a parent node text.
+
+```python
+from llama_index.node_parser import HierarchicalNodeParser, get_leaf_nodes
+from llama_index import ServiceContext, VectorStoreIndex, StorageContext
+
+node_parser = HierarchicalNodeParser.from_defaults(chunk_sizes=[2048, 512, 128])
+nodes = node_parser.get_nodes_from_documents([document])
+leaf_nodes = get_leaf_nodes(nodes)
+
+merging_context = ServiceContext.from_defaults(
+    llm=llm,
+    embed_model="local:BAAI/bge-small-en-v1.5",
+)
+storage_context = StorageContext.from_defaults()
+storage_context.docstore.add_documents(nodes)
+automerging_index = VectorStoreIndex(
+    leaf_nodes, storage_context=storage_context, service_context=merging_context
+)
+```
+
+**3. Demo query engine (merge not wired)** — The notebook builds `AutoMergingRetriever` as `retriever` but passes `automerging_retriever` (the plain vector retriever) into `RetrieverQueryEngine.from_args`. Demo queries therefore skip parent merge; verbose merge logs appear only when the **eval** helper uses the merging retriever.
+
+```python
+from llama_index.indices.postprocessor import SentenceTransformerRerank
+from llama_index.retrievers import AutoMergingRetriever
+from llama_index.query_engine import RetrieverQueryEngine
+
+automerging_retriever = automerging_index.as_retriever(similarity_top_k=12)
+
+retriever = AutoMergingRetriever(
+    automerging_retriever, automerging_index.storage_context, verbose=True
+)
+
+rerank = SentenceTransformerRerank(top_n=6, model="BAAI/bge-reranker-base")
+
+auto_merging_engine = RetrieverQueryEngine.from_args(
+    automerging_retriever, node_postprocessors=[rerank]
+)
+```
+
+**4. Eval helper (merge wired correctly)** — `get_automerging_query_engine` passes the `AutoMergingRetriever` instance into `RetrieverQueryEngine`. Retrieval still starts at leaves (`similarity_top_k=12`); merges promote clusters to parents before rerank trims to `top_n=6`.
+
+```python
+def get_automerging_query_engine(
+    automerging_index,
+    similarity_top_k=12,
+    rerank_top_n=6,
+):
+    base_retriever = automerging_index.as_retriever(similarity_top_k=similarity_top_k)
+    retriever = AutoMergingRetriever(
+        base_retriever, automerging_index.storage_context, verbose=True
+    )
+    rerank = SentenceTransformerRerank(
+        top_n=rerank_top_n, model="BAAI/bge-reranker-base"
+    )
+    return RetrieverQueryEngine.from_args(retriever, node_postprocessors=[rerank])
+```
+
+**5. Score two hierarchies** — One `reset_database()` before `app_0` (`chunk_sizes=[2048, 512]`). A second index uses `[2048, 512, 128]` as `app_1` without resetting, so the final leaderboard lists both apps. Questions come from `generated_questions.text`. Re-run `get_leaderboard` after judges finish if any column is still `NaN`.
+
+```python
+from trulens_eval import Tru
+from utils import get_prebuilt_trulens_recorder
+
+def run_evals(eval_questions, tru_recorder, query_engine):
+    for question in eval_questions:
+        with tru_recorder as recording:
+            response = query_engine.query(question)
+
+Tru().reset_database()
+tru_recorder = get_prebuilt_trulens_recorder(auto_merging_engine_0, app_id="app_0")
+run_evals(eval_questions, tru_recorder, auto_merging_engine_0)
+Tru().get_leaderboard(app_ids=[])
+```
 
 `utils.py` builds three levels, 2048, 512, and 128. The figure shows the bottom of that tree: a 512-token parent split into 128-token children. Retrieval starts at the leaves. On the left, enough children of one parent match, so those hits are replaced by the parent. On the right, a single child matches, so the model gets that 128-token chunk.
 
