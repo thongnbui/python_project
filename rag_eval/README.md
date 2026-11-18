@@ -4,7 +4,7 @@
 <style>
 pre {
   font-size: 12px;
-  line-height: 1.15;
+  line-height: 1.2;
   margin: 0.4em 0;
   padding: 0.5em 0.75em;
 }
